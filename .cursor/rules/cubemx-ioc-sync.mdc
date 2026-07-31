@@ -1,0 +1,33 @@
+---
+description: CubeMX .ioc sync — use GUI; full DMA+ADC deps required
+alwaysApply: true
+---
+
+# CubeMX `.ioc` sync
+
+## Prefer CubeMX GUI
+
+When aligning peripherals with firmware, configure in **CubeMX UI** then Generate Code (`KeepUserCode=true`).
+
+Do not hand-edit `.ioc` with partial keys (e.g. `DMA_CIRCULAR` without DMA requests) — CubeMX will wipe ADC.
+
+## Required ADC/DMA contract (must match code)
+
+1. **System → DMA**
+   - ADC1 → DMA1 Stream0, Circular, Periph/Mem Halfword, MemInc **Disable**
+   - ADC2 → DMA1 Stream1, same
+2. **ADC1 / ADC2** (after DMA exists)
+   - Diff channels: ADC1 IN16 (PA0/PA1), ADC2 IN3 (PA6/PA7)
+   - Continuous: Disable
+   - External trigger: **hrtim_adc_trg1** / `ADC_EXTERNALTRIG_HR1_ADCTRG1`, Rising
+   - Conversion Data Management: **DMA Circular**
+   - Overrun: Overwrite
+   - Sampling: 64.5 cycles
+3. HRTIM ADCTRG1 source remains in `VCM_HRTIM_InitTimers()` (TimerA CMP2)
+
+## After Generate Code
+
+- Confirm `MX_ADC*_Init` has HRTIM trigger + DMA circular
+- If MSP gets Cube DMA **and** old USER CODE DMA, remove the USER CODE DMA block to avoid double `HAL_DMA_Init`
+- Keep `main.c` USER CODE ADC re-apply as safety net until verified
+- PWM/current-loop still owned by `vcm_config.h` / `vcm_ctrl.c`
