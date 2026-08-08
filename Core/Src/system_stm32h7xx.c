@@ -82,8 +82,10 @@
 /*!< Uncomment the following line if you need to relocate your vector Table in
      Internal SRAM. */
 /* #define VECT_TAB_SRAM */
-/* App linked at 0x08020000 (IAP_UartSTM32H7 USER_APP_ADDRESS); offset from FLASH_BANK1_BASE */
-#define VECT_TAB_OFFSET  0x00020000UL        /*!< Vector Table base offset field.
+/* Must match linker ROM ORIGIN.
+ * Current STM32H743ZGTx_FLASH.ld: ORIGIN = 0x08000000 → offset 0.
+ * For IAP app at 0x08020000: set ROM ORIGIN=0x08020000 and VECT_TAB_OFFSET=0x00020000. */
+#define VECT_TAB_OFFSET  0x00000000UL        /*!< Vector Table base offset field.
                                       This value must be a multiple of 0x200. */
 /******************************************************************************/
 

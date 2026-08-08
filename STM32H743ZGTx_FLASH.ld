@@ -50,8 +50,9 @@ MEMORY
   ITCMRAM    (xrw)    : ORIGIN = 0x00000000,   LENGTH = 64K
   RAM    (xrw)    : ORIGIN = 0x20000000,   LENGTH = 128K
   RAM_D1 (xrw)    : ORIGIN = 0x24000000,   LENGTH = 320K
-  /* IAP bootloader: 0x08000000..0x0801FFFF (128KB, KEY_BASE@0x0801FF00). App @ 0x08020000. */
-  ROM    (rx)    : ORIGIN = 0x08020000,   LENGTH = 256K
+  /* Debug/standalone download at 0x08000000 (VECT_TAB_OFFSET=0 in system_stm32h7xx.c).
+   * IAP layout: Boot 0x08000000..0x0801FFFF, App ORIGIN=0x08020000 + VECT_TAB_OFFSET=0x20000. */
+  ROM    (rx)    : ORIGIN = 0x08000000,   LENGTH = 256K
 }
 
 /* Sections */

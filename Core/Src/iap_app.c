@@ -20,13 +20,14 @@ void IAP_RequestBootloader(void)
 
 void IAP_ServiceUartCommand(void)
 {
-  uint8_t cmd = 0U;
+  uint8_t cmd;
 
-  /* Non-blocking poll: host may send 0xA0 / 0x05 while app is running */
-  if (HAL_UART_Receive(&huart1, &cmd, 1U, 0U) != HAL_OK)
+  /* Poll RXNE only — avoid HAL_UART_Receive (can pull in RCC float clock math) */
+  if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_RXNE) == 0U)
   {
     return;
   }
+  cmd = (uint8_t)(huart1.Instance->RDR & 0xFFU);
 
   if ((cmd == IAP_CMD_ENTER_BOOT) || (cmd == IAP_CMD_UPGRADE))
   {

@@ -11,107 +11,22 @@ VCM_Handle_t g_vcm;
 static volatile uint16_t vcm_adc1_dma __attribute__((section(".dma_buffer"), aligned(32)));
 static volatile uint16_t vcm_adc2_dma __attribute__((section(".dma_buffer"), aligned(32)));
 
-#if VCM_SCOPE_ENABLE
-volatile VCM_ScopeSample_t g_vcm_scope[VCM_SCOPE_LEN];
-volatile uint32_t g_vcm_scope_wr;
-volatile uint32_t g_vcm_scope_count;
-volatile uint8_t g_vcm_scope_frozen;
-volatile uint32_t g_vcm_scope_capture_n;
-#endif
-
 static void VCM_HRTIM_ApplyDuty(uint16_t cmp_a, uint16_t cmp_b);
 static void VCM_ConfigHalfBridge(uint32_t timer_idx, uint32_t output1, uint32_t output2);
 static void VCM_FaultPin_Set(bool fault_active);
 
-/* Previous PWM-period ifb for 2-sample average into PI (no EMA) */
 static float vcm_ifb_z1;
-/* Sticky sign for unidirectional shunt: follows mod with hysteresis */
-static float vcm_ifb_sign = 1.0f;
+static float vcm_mod_ff_f;
+static uint8_t vcm_ifb_pi_primed;
 
-#if VCM_SCOPE_ENABLE
-static void VCM_Scope_Push(void)
+float VCM_AdcToIfbAmpere(uint16_t raw)
 {
-  VCM_ScopeSample_t *s;
-  uint32_t wr;
-
-  if (g_vcm_scope_frozen != 0U)
-  {
-    return;
-  }
-
-  wr = g_vcm_scope_wr;
-  s = (VCM_ScopeSample_t *)&g_vcm_scope[wr];
-  s->ifb_a = g_vcm.ifb_a;
-  s->iref_a = g_vcm.iref_a;
-  s->mod = g_vcm.mod;
-  s->adc_ifb = g_vcm.adc_ifb;
-  s->adc_iref = g_vcm.adc_iref;
-  s->state = (uint8_t)g_vcm.state;
-  s->en = VCM_IsDrvEnActive() ? 1U : 0U;
-  s->fault = (g_vcm.fault_flags != 0U) ? 1U : 0U;
-  s->ovr = 0U;
-  if (__HAL_ADC_GET_FLAG(&hadc1, ADC_FLAG_OVR) != 0U)
-  {
-    s->ovr |= 1U;
-  }
-  if (__HAL_ADC_GET_FLAG(&hadc2, ADC_FLAG_OVR) != 0U)
-  {
-    s->ovr |= 2U;
-  }
-
-  wr++;
-  if (wr >= VCM_SCOPE_LEN)
-  {
-    wr = 0U;
-  }
-  g_vcm_scope_wr = wr;
-  g_vcm_scope_count++;
-
-  if ((g_vcm_scope_capture_n != 0U) && (g_vcm_scope_count >= g_vcm_scope_capture_n))
-  {
-    g_vcm_scope_frozen = 1U;
-  }
+  return VCM_IFB_POLARITY * ((float)raw - VCM_ADC_MID) / VCM_IFB_COUNTS_PER_A;
 }
 
-void VCM_Scope_Reset(void)
+float VCM_AdcToIrefAmpere(uint16_t raw)
 {
-  g_vcm_scope_wr = 0U;
-  g_vcm_scope_count = 0U;
-  g_vcm_scope_frozen = 0U;
-  g_vcm_scope_capture_n = 0U;
-}
-
-void VCM_Scope_Freeze(void)
-{
-  g_vcm_scope_frozen = 1U;
-}
-
-void VCM_Scope_Resume(void)
-{
-  g_vcm_scope_capture_n = 0U;
-  g_vcm_scope_frozen = 0U;
-}
-
-void VCM_Scope_Capture(uint32_t n)
-{
-  if (n == 0U)
-  {
-    n = VCM_SCOPE_LEN;
-  }
-  if (n > VCM_SCOPE_LEN)
-  {
-    n = VCM_SCOPE_LEN;
-  }
-  g_vcm_scope_wr = 0U;
-  g_vcm_scope_count = 0U;
-  g_vcm_scope_capture_n = n;
-  g_vcm_scope_frozen = 0U;
-}
-#endif
-
-float VCM_AdcToAmpere(uint16_t raw)
-{
-  return ((float)raw - VCM_ADC_MID) / VCM_ADC_COUNTS_PER_A;
+  return VCM_IREF_POLARITY * ((float)raw - VCM_ADC_MID) / VCM_IREF_COUNTS_PER_A;
 }
 
 static void VCM_FaultPin_Set(bool fault_active)
@@ -134,6 +49,15 @@ int VCM_AdcStart(void)
   {
     return -1;
   }
+
+  /* HAL_ADC_Start_DMA uses HAL_DMA_Start_IT: with NDTR=1 circular @100 kHz
+   * that is ~200 k IRQ/s and starves main/SysTick. Samples are read in
+   * VCM_CurrentLoop_IRQHandler — TC/HT IRQs are not needed. */
+  __HAL_DMA_DISABLE_IT(hadc1.DMA_Handle, DMA_IT_TC | DMA_IT_HT);
+  __HAL_DMA_DISABLE_IT(hadc2.DMA_Handle, DMA_IT_TC | DMA_IT_HT);
+  HAL_NVIC_DisableIRQ(DMA1_Stream0_IRQn);
+  HAL_NVIC_DisableIRQ(DMA1_Stream1_IRQn);
+
   return 0;
 }
 
@@ -158,32 +82,10 @@ static void VCM_HRTIM_ApplyDuty(uint16_t cmp_a, uint16_t cmp_b)
     cmp_b = VCM_DUTY_MAX_COUNTS;
   }
 
-  /* Shunt: coil I only on active diagonal [active_lo, active_hi).
-   * Trigger early in the window (not center): SAR sampling aperture extends
-   * AFTER the trigger; center+long Ts often finishes in freewheel (adc≈mid),
-   * which raises ifb_pi and prevents PI from opening mod. */
-  {
-    uint16_t active_lo = (cmp_a < cmp_b) ? cmp_a : cmp_b;
-    uint16_t active_hi = (cmp_a > cmp_b) ? cmp_a : cmp_b;
-    uint16_t active_span = (uint16_t)(active_hi - active_lo);
-
-    if (active_span > (uint16_t)(2U * VCM_ADC_TRIG_EDGE_MARGIN))
-    {
-      /* ~1/4 into active after edge margin — room for sample+convert before end */
-      adc_trig = (uint16_t)(active_lo + VCM_ADC_TRIG_EDGE_MARGIN +
-                            (active_span / 4U));
-      if (adc_trig > (uint16_t)(active_hi - VCM_ADC_TRIG_EDGE_MARGIN))
-      {
-        adc_trig = (uint16_t)(active_hi - VCM_ADC_TRIG_EDGE_MARGIN);
-      }
-      g_vcm.adc_active_valid = (active_span >= VCM_ADC_ACTIVE_MIN_COUNTS) ? 1U : 0U;
-    }
-    else
-    {
-      adc_trig = (uint16_t)(VCM_PWM_PERIOD / 2U);
-      g_vcm.adc_active_valid = 0U;
-    }
-  }
+  /* Coil-series RS: I valid all period. Prefer PERIOD/4 so that at m≈0
+   * (both edges at PERIOD/2) the sample is not on the switching instant. */
+  adc_trig = (uint16_t)(VCM_PWM_PERIOD / 4U);
+  g_vcm.adc_active_valid = 1U;
 
   __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_COMPAREUNIT_1, cmp_a);
   __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_COMPAREUNIT_2, adc_trig);
@@ -211,9 +113,11 @@ void VCM_Stop(void)
                                HRTIM_OUTPUT_TB1 | HRTIM_OUTPUT_TB2);
   g_vcm.integral = 0.0f;
   g_vcm.mod = 0.0f;
+  g_vcm.mod_ff = 0.0f;
+  vcm_mod_ff_f = 0.0f;
   g_vcm.ifb_pi_a = 0.0f;
   vcm_ifb_z1 = 0.0f;
-  vcm_ifb_sign = 1.0f;
+  vcm_ifb_pi_primed = 0U;
   g_vcm.ifb_cal_count = 0U;
   g_vcm.ifb_cal_acc = 0.0f;
   VCM_HRTIM_ApplyDuty((uint16_t)(VCM_PWM_PERIOD / 2U), (uint16_t)(VCM_PWM_PERIOD / 2U));
@@ -332,6 +236,7 @@ void VCM_CurrentLoop_IRQHandler(void)
   bool en_active;
   float err;
   float m;
+  float m_ff;
   float m_unsat;
   float dm;
   float iref_abs;
@@ -352,7 +257,7 @@ void VCM_CurrentLoop_IRQHandler(void)
   __DSB();
   g_vcm.adc_ifb  = vcm_adc1_dma;
   g_vcm.adc_iref = vcm_adc2_dma;
-  g_vcm.ifb_raw_a = VCM_AdcToAmpere(g_vcm.adc_ifb);
+  g_vcm.ifb_raw_a = VCM_AdcToIfbAmpere(g_vcm.adc_ifb);
 
   if (g_vcm.iref_override_en != 0U)
   {
@@ -360,7 +265,7 @@ void VCM_CurrentLoop_IRQHandler(void)
   }
   else
   {
-    g_vcm.iref_a = VCM_AdcToAmpere(g_vcm.adc_iref);
+    g_vcm.iref_a = VCM_AdcToIrefAmpere(g_vcm.adc_iref);
   }
   if (g_vcm.iref_a > VCM_I_MAX_A)
   {
@@ -371,40 +276,30 @@ void VCM_CurrentLoop_IRQHandler(void)
     g_vcm.iref_a = -VCM_I_MAX_A;
   }
 
-  /* Shunt is unidirectional (to GND): ADC = |I| on active diagonal only.
-   * Sign MUST follow applied voltage (mod), NOT iref. Using iref flips the
-   * feedback sign on command reverse while I still flows the old way →
-   * err polarity inverts and current runs away larger in the old direction. */
-  {
-    float mag = g_vcm.ifb_raw_a - g_vcm.ifb_offset_a;
-    if (mag < 0.0f)
-    {
-      mag = -mag;
-    }
-    if (g_vcm.mod > VCM_DT_COMP_HYST_A)
-    {
-      vcm_ifb_sign = 1.0f;
-    }
-    else if (g_vcm.mod < -VCM_DT_COMP_HYST_A)
-    {
-      vcm_ifb_sign = -1.0f;
-    }
-    /* else keep previous sign through mod≈0 */
-    g_vcm.ifb_a = vcm_ifb_sign * mag;
-  }
+  /* Bidirectional series sense: signed coil current (minus zero calib). */
+  g_vcm.ifb_a = g_vcm.ifb_raw_a - g_vcm.ifb_offset_a;
 
-  /* Only update PI feedback in a valid active-diagonal window.
-   * Freewheel (narrow/zero active): shunt reads ~0 but coil I continues —
-   * hold last ifb_pi (do NOT treat as 0, or low-|m| limit-cycles). */
-  if (g_vcm.adc_active_valid != 0U)
+  /* Light EMA; reject only huge single-period spikes (switch ringing). */
   {
-    g_vcm.ifb_pi_a = 0.5f * (g_vcm.ifb_a + vcm_ifb_z1);
-    vcm_ifb_z1 = g_vcm.ifb_a;
+    float d = g_vcm.ifb_a - g_vcm.ifb_pi_a;
+    if (d < 0.0f)
+    {
+      d = -d;
+    }
+    if ((vcm_ifb_pi_primed == 0U) || (d <= VCM_IFB_SPIKE_A))
+    {
+      if (vcm_ifb_pi_primed == 0U)
+      {
+        g_vcm.ifb_pi_a = g_vcm.ifb_a;
+        vcm_ifb_pi_primed = 1U;
+      }
+      else
+      {
+        g_vcm.ifb_pi_a += VCM_IFB_PI_ALPHA * (g_vcm.ifb_a - g_vcm.ifb_pi_a);
+      }
+      vcm_ifb_z1 = g_vcm.ifb_a;
+    }
   }
-
-#if VCM_SCOPE_ENABLE
-  VCM_Scope_Push();
-#endif
 
   en_active = VCM_IsDrvEnActive();
   if (!en_active)
@@ -446,21 +341,17 @@ void VCM_CurrentLoop_IRQHandler(void)
       g_vcm.ifb_cal_count = 0U;
       g_vcm.integral = 0.0f;
       g_vcm.mod = 0.0f;
+      g_vcm.mod_ff = 0.0f;
+      vcm_mod_ff_f = 0.0f;
       g_vcm.ifb_pi_a = 0.0f;
       vcm_ifb_z1 = 0.0f;
-      vcm_ifb_sign = 1.0f;
+      vcm_ifb_pi_primed = 0U;
       g_vcm.state = VCM_STATE_RUN;
     }
     return;
   }
 
-#if VCM_FORCE_ZERO_MOD
-  g_vcm.integral = 0.0f;
-  g_vcm.mod = 0.0f;
-  VCM_HRTIM_ApplyDuty((uint16_t)(VCM_PWM_PERIOD / 2U), (uint16_t)(VCM_PWM_PERIOD / 2U));
-  return;
-#else
-  /* Open-loop: force modulation, keep ADC/ifb updating for sense-path check */
+  /* Open-loop modulation (optional) */
   if (g_vcm.mod_override_en != 0U)
   {
     m = g_vcm.mod_override;
@@ -477,60 +368,69 @@ void VCM_CurrentLoop_IRQHandler(void)
   }
   else
   {
-  iref_abs = (g_vcm.iref_a >= 0.0f) ? g_vcm.iref_a : -g_vcm.iref_a;
+    iref_abs = (g_vcm.iref_a >= 0.0f) ? g_vcm.iref_a : -g_vcm.iref_a;
 
-  /* Always use held ifb_pi (updated only when adc_active_valid). After CALIB
-   * ifb_pi=0, so a non-zero iref still opens mod until the window is wide. */
-  err = g_vcm.iref_a - g_vcm.ifb_pi_a;
+    /* Series sense: ifb_pi tracks continuously (adc_active_valid always 1). */
+    err = g_vcm.iref_a - g_vcm.ifb_pi_a;
 
-  if ((iref_abs < VCM_IREF_NEAR_ZERO_A) &&
-      ((g_vcm.ifb_pi_a > VCM_IFB_UNEXPECTED_A) || (g_vcm.ifb_pi_a < -VCM_IFB_UNEXPECTED_A)))
-  {
-    g_vcm.integral = 0.0f;
-    err = -g_vcm.ifb_pi_a;
-  }
+    if ((iref_abs < VCM_IREF_NEAR_ZERO_A) &&
+        ((g_vcm.ifb_pi_a > VCM_IFB_UNEXPECTED_A) || (g_vcm.ifb_pi_a < -VCM_IFB_UNEXPECTED_A)))
+    {
+      g_vcm.integral = 0.0f;
+      err = -g_vcm.ifb_pi_a;
+    }
 
-  m_unsat = g_vcm.kp * err + g_vcm.integral;
-  if (iref_abs < VCM_IREF_I_HOLD_A)
-  {
-    /* Command ≈ 0: do not hold leftover integral (seen as mod≈0.19 at iref=0). */
-    g_vcm.integral *= (1.0f - VCM_I_LEAK_PER_PERIOD);
-  }
-  else if (!(((m_unsat >= VCM_MOD_MAX) && (err > 0.0f)) ||
-             ((m_unsat <= -VCM_MOD_MAX) && (err < 0.0f))))
-  {
-    g_vcm.integral += g_vcm.ki * err * VCM_PWM_TS_S;
-  }
-  if (g_vcm.integral > VCM_I_INTEGRAL_LIM)
-  {
-    g_vcm.integral = VCM_I_INTEGRAL_LIM;
-  }
-  if (g_vcm.integral < -VCM_I_INTEGRAL_LIM)
-  {
-    g_vcm.integral = -VCM_I_INTEGRAL_LIM;
-  }
+#if VCM_FF_ENABLE
+    /* Resistive drop FF + LPF: avoid instant m jump on iref step (undershoot). */
+    m_ff = g_vcm.iref_a * g_vcm.ff_mod_per_a;
+    vcm_mod_ff_f += VCM_FF_ALPHA * (m_ff - vcm_mod_ff_f);
+    m_ff = vcm_mod_ff_f;
+#else
+    m_ff = 0.0f;
+    vcm_mod_ff_f = 0.0f;
+#endif
+    g_vcm.mod_ff = m_ff;
 
-  m = g_vcm.kp * err + g_vcm.integral;
-  if (m > VCM_MOD_MAX)
-  {
-    m = VCM_MOD_MAX;
-  }
-  if (m < -VCM_MOD_MAX)
-  {
-    m = -VCM_MOD_MAX;
-  }
+    m_unsat = g_vcm.kp * err + g_vcm.integral + m_ff;
+    if (iref_abs < VCM_IREF_I_HOLD_A)
+    {
+      g_vcm.integral *= (1.0f - VCM_I_LEAK_PER_PERIOD);
+    }
+    else if (!(((m_unsat >= VCM_MOD_MAX) && (err > 0.0f)) ||
+               ((m_unsat <= -VCM_MOD_MAX) && (err < 0.0f))))
+    {
+      g_vcm.integral += g_vcm.ki * err * VCM_PWM_TS_S;
+    }
+    if (g_vcm.integral > VCM_I_INTEGRAL_LIM)
+    {
+      g_vcm.integral = VCM_I_INTEGRAL_LIM;
+    }
+    if (g_vcm.integral < -VCM_I_INTEGRAL_LIM)
+    {
+      g_vcm.integral = -VCM_I_INTEGRAL_LIM;
+    }
 
-  dm = m - g_vcm.mod;
-  if (dm > VCM_MOD_SLEW_PER_PERIOD)
-  {
-    dm = VCM_MOD_SLEW_PER_PERIOD;
-  }
-  if (dm < -VCM_MOD_SLEW_PER_PERIOD)
-  {
-    dm = -VCM_MOD_SLEW_PER_PERIOD;
-  }
-  m = g_vcm.mod + dm;
-  g_vcm.mod = m;
+    m = g_vcm.kp * err + g_vcm.integral + m_ff;
+    if (m > VCM_MOD_MAX)
+    {
+      m = VCM_MOD_MAX;
+    }
+    if (m < -VCM_MOD_MAX)
+    {
+      m = -VCM_MOD_MAX;
+    }
+
+    dm = m - g_vcm.mod;
+    if (dm > VCM_MOD_SLEW_PER_PERIOD)
+    {
+      dm = VCM_MOD_SLEW_PER_PERIOD;
+    }
+    if (dm < -VCM_MOD_SLEW_PER_PERIOD)
+    {
+      dm = -VCM_MOD_SLEW_PER_PERIOD;
+    }
+    m = g_vcm.mod + dm;
+    g_vcm.mod = m;
   }
 
   /* Dead-time compensation follows applied mod (same reason as ifb sign) */
@@ -556,7 +456,6 @@ void VCM_CurrentLoop_IRQHandler(void)
     cmp_b = (uint16_t)((0.5f - m_pwm) * (float)VCM_PWM_PERIOD);
   }
   VCM_HRTIM_ApplyDuty(cmp_a, cmp_b);
-#endif
 }
 
 void VCM_Init(void)
@@ -567,11 +466,14 @@ void VCM_Init(void)
   g_vcm.ifb_raw_a = 0.0f;
   g_vcm.ifb_offset_a = 0.0f;
   vcm_ifb_z1 = 0.0f;
-  vcm_ifb_sign = 1.0f;
+  vcm_ifb_pi_primed = 0U;
   g_vcm.mod = 0.0f;
+  g_vcm.mod_ff = 0.0f;
+  vcm_mod_ff_f = 0.0f;
   g_vcm.integral = 0.0f;
   g_vcm.kp = VCM_KP;
   g_vcm.ki = VCM_KI;
+  g_vcm.ff_mod_per_a = VCM_FF_MOD_PER_A;
   g_vcm.state = VCM_STATE_IDLE;
   g_vcm.fault_flags = 0U;
   g_vcm.adc1_ovr_cnt = 0U;
@@ -586,9 +488,6 @@ void VCM_Init(void)
 
   VCM_FaultPin_Set(false);
   VCM_HRTIM_ApplyDuty((uint16_t)(VCM_PWM_PERIOD / 2U), (uint16_t)(VCM_PWM_PERIOD / 2U));
-#if VCM_SCOPE_ENABLE
-  VCM_Scope_Reset();
-#endif
 }
 
 static void VCM_ConfigHalfBridge(uint32_t timer_idx, uint32_t output1, uint32_t output2)

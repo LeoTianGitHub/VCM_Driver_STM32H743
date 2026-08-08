@@ -75,10 +75,7 @@ static void ProcessLed_Service(void)
   }
   else
   {
-	period_ms = 2000U;
-//    HAL_GPIO_WritePin(PROCESS_LED_GPIO_Port, PROCESS_LED_Pin, GPIO_PIN_RESET);
-//    led_tick = now;
-//    return;
+    period_ms = 2000U;
   }
 
   if ((now - led_tick) >= period_ms)
@@ -97,7 +94,7 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-	SCB->VTOR = 0x08020000UL; /* 与链接脚本 FLASH ORIGIN 一致 */
+	//SCB->VTOR = 0x08020000UL; /* 与链接脚本 FLASH ORIGIN 一致 */
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -141,7 +138,7 @@ int main(void)
     Error_Handler();
   }
 
-  /* Override Cube defaults: 20 kHz PWM + dead-time + REP IRQ */
+  /* Override Cube defaults: 100 kHz PWM + dead-time + REP IRQ */
   VCM_HRTIM_InitTimers();
   VCM_Init();
   if (VCM_AdcStart() != 0)
@@ -511,7 +508,7 @@ static void MX_HRTIM_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN HRTIM_Init 2 */
-  /* Real 20 kHz / dead-time applied by VCM_HRTIM_InitTimers() after this. */
+  /* Real 100 kHz / dead-time applied by VCM_HRTIM_InitTimers() after this. */
   /* USER CODE END HRTIM_Init 2 */
   HAL_HRTIM_MspPostInit(&hhrtim);
 

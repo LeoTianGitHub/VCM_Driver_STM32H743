@@ -255,7 +255,9 @@ void HAL_HRTIM_MspInit(HRTIM_HandleTypeDef* hhrtim)
     /* Peripheral clock enable */
     __HAL_RCC_HRTIM1_CLK_ENABLE();
     /* HRTIM1 interrupt Init */
-    HAL_NVIC_SetPriority(HRTIM1_TIMA_IRQn, 0, 0);
+    /* Priority 1: leave room under faults; SysTick(default) still lower.
+     * Must finish ISR within one PWM period or main/SysTick starve. */
+    HAL_NVIC_SetPriority(HRTIM1_TIMA_IRQn, 1, 0);
     HAL_NVIC_EnableIRQ(HRTIM1_TIMA_IRQn);
     /* USER CODE BEGIN HRTIM1_MspInit 1 */
     /* Re-assert CPUCLK after Cube regenerates TIMCLK above. */

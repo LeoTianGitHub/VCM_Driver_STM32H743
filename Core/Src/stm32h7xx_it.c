@@ -11,6 +11,7 @@
 #include "stm32h7xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "vcm_ctrl.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -224,9 +225,15 @@ void DMA1_Stream1_IRQHandler(void)
 void HRTIM1_TIMA_IRQHandler(void)
 {
   /* USER CODE BEGIN HRTIM1_TIMA_IRQn 0 */
-
+  /* Fast path: REP @ PWM rate — skip full HAL flag scan (keeps main alive). */
+  if (__HAL_HRTIM_TIMER_GET_FLAG(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_TIM_FLAG_REP) != 0U)
+  {
+    __HAL_HRTIM_TIMER_CLEAR_IT(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_TIM_IT_REP);
+    VCM_CurrentLoop_IRQHandler();
+    return;
+  }
   /* USER CODE END HRTIM1_TIMA_IRQn 0 */
-  HAL_HRTIM_IRQHandler(&hhrtim,HRTIM_TIMERINDEX_TIMER_A);
+  HAL_HRTIM_IRQHandler(&hhrtim, HRTIM_TIMERINDEX_TIMER_A);
   /* USER CODE BEGIN HRTIM1_TIMA_IRQn 1 */
 
   /* USER CODE END HRTIM1_TIMA_IRQn 1 */
