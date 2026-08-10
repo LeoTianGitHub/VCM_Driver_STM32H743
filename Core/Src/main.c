@@ -13,6 +13,7 @@
 /* USER CODE BEGIN Includes */
 #include "vcm_ctrl.h"
 #include "iap_app.h"
+#include "UID_Encryption.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -27,7 +28,7 @@
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-
+#define UID_ENCRYPTION
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -41,7 +42,7 @@ HRTIM_HandleTypeDef hhrtim;
 UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
-
+const uint8_t custom_id[12] = CUSTOM_ID;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -94,7 +95,23 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-	//SCB->VTOR = 0x08020000UL; /* 与链接脚本 FLASH ORIGIN 一致 */
+  /*
+   * Boot→App is not a POR: Boot may leave SysTick/NVIC/PLL running.
+   * Without cleanup, HAL_RCC_OscConfig often fails → Error_Handler → LED stuck on.
+   */
+  __disable_irq();
+  SCB->VTOR = IAP_APP_ADDRESS;
+  SysTick->CTRL = 0U;
+  SysTick->LOAD = 0U;
+  SysTick->VAL  = 0U;
+  for (uint32_t i = 0U; i < 8U; i++)
+  {
+    NVIC->ICER[i] = 0xFFFFFFFFu;
+    NVIC->ICPR[i] = 0xFFFFFFFFu;
+  }
+  __DSB();
+  __ISB();
+  __enable_irq();
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -107,14 +124,21 @@ int main(void)
   /* USER CODE END Init */
 
   /* Configure the system clock */
+  /* USER CODE BEGIN SysInit */
+  /* Drop Boot PLL/clock tree so SystemClock_Config can run cleanly */
+  if (HAL_RCC_DeInit() != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE END SysInit */
   SystemClock_Config();
 
   /* Configure the peripherals common clocks */
   PeriphCommonClock_Config();
 
-  /* USER CODE BEGIN SysInit */
+  /* USER CODE BEGIN SysInit2 */
 
-  /* USER CODE END SysInit */
+  /* USER CODE END SysInit2 */
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
@@ -124,11 +148,31 @@ int main(void)
   MX_HRTIM_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
-  for(uint8_t i=0; i<3; i++)
-  {
-	  HAL_GPIO_TogglePin(PROCESS_LED_GPIO_Port, PROCESS_LED_Pin);
-	  HAL_Delay(200);
-  }
+#ifdef UID_ENCRYPTION
+	if(UID_Encryption_Key_Check((void*)KEY_BASE,
+								(void*)UID_BASE,
+								(void*)custom_id,
+								LENGTH_12,
+								LITTLE_ENDIA,
+								ALGORITHM_4))
+	{/* 验证不通过 */
+		while(1) //LED快闪
+		{
+			HAL_GPIO_TogglePin(PROCESS_LED_GPIO_Port, PROCESS_LED_Pin);
+			HAL_Delay(100);
+		}
+	}
+	else
+	{/* 验证通过 */
+		for(uint8_t i=0; i<10;i++)
+		{
+			HAL_GPIO_TogglePin(PROCESS_LED_GPIO_Port, PROCESS_LED_Pin);
+			HAL_Delay(50);
+		}
+		HAL_Delay(200);
+	}
+  #endif
+
   if (HAL_ADCEx_Calibration_Start(&hadc1, ADC_CALIB_OFFSET, ADC_DIFFERENTIAL_ENDED) != HAL_OK)
   {
     Error_Handler();

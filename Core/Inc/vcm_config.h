@@ -128,7 +128,7 @@
 
 /* 100 kHz loop: Kp sets rise; with R-drop FF, Ki only trims model error. */
 #define VCM_KP                  1.0f
-#define VCM_KI                  1000.0f
+#define VCM_KI                  2000.0f
 #define VCM_I_INTEGRAL_LIM      VCM_MOD_MAX
 
 /* Plant (user): L≈915 µH, Rcoil≈5.4 Ω. Bipolar PWM: Vcoil ≈ 2*m*Vbus.
