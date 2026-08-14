@@ -7,15 +7,13 @@
  *
 
  * Flash: app linked at 0x08020000 for IAP_UartSTM32H7 (see iap_app.h).
-
  *
-
+ * Operating envelope (this board/firmware):
+ *   Bus VS = 12 V, command/loop full-scale I_MAX = 1.0 A (OCP 1.2 A).
+ *
  * Sense (rev):
-
  *   IFB  — coil series RS + TPA8001-SOAR → ADC1 differential
-
  *   IREF — ±10 V cmd via TPA2672 (G=0.15) → ADC2 differential
-
  */
 
 #ifndef VCM_CONFIG_H
@@ -131,9 +129,9 @@
 #define VCM_KI                  2000.0f
 #define VCM_I_INTEGRAL_LIM      VCM_MOD_MAX
 
-/* Plant (user): L≈915 µH, Rcoil≈5.4 Ω. Bipolar PWM: Vcoil ≈ 2*m*Vbus.
- * SCALE<1 derates FF (MOSFET/Rdson, Vbus higher than define → less FF).
- * ALPHA: LPF on m_ff; ~0.05 → τ≈L/R, softens iref step so FF does not yank. */
+/* Plant FF: L≈915 µH, Rcoil≈5.4 Ω; bus 12 V; bipolar Vcoil ≈ 2*m*Vbus.
+ * Rated use: max 1 A @ 12 V input (see VCM_I_MAX_A / VCM_VBUS_V).
+ * SCALE<1 derates FF; ALPHA LPF softens m_ff on iref steps. */
 #define VCM_COIL_R_OHM          5.4f
 #define VCM_VBUS_V              12.0f
 #define VCM_FF_ENABLE           1
