@@ -27,10 +27,17 @@ typedef struct
   float ifb_offset_a;
   float mod;
   float mod_ff;
+  float mod_ff_l;
   float integral;
   float kp;
   float ki;
   float ff_mod_per_a;
+  float ff_alpha;
+  float ff_l_scale;
+  float ff_l_iref_alpha;
+  float ff_l_mod_max;
+  float mod_lpf_alpha;
+  float mod_slew_per_period;
   float iref_override_a;
   float mod_override;
   float ifb_cal_acc;

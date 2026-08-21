@@ -28,7 +28,7 @@
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-#define UID_ENCRYPTION
+//#define UID_ENCRYPTION
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -182,7 +182,7 @@ int main(void)
     Error_Handler();
   }
 
-  /* Override Cube defaults: 100 kHz PWM + dead-time + REP IRQ */
+  /* Override Cube defaults: 50 kHz PWM + current loop */
   VCM_HRTIM_InitTimers();
   VCM_Init();
   if (VCM_AdcStart() != 0)
@@ -552,7 +552,7 @@ static void MX_HRTIM_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN HRTIM_Init 2 */
-  /* Real 100 kHz / dead-time applied by VCM_HRTIM_InitTimers() after this. */
+  /* Real 50 kHz / dead-time applied by VCM_HRTIM_InitTimers() after this. */
   /* USER CODE END HRTIM_Init 2 */
   HAL_HRTIM_MspPostInit(&hhrtim);
 

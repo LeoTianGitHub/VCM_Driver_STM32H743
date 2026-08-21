@@ -17,7 +17,22 @@ static void VCM_FaultPin_Set(bool fault_active);
 
 static float vcm_ifb_z1;
 static float vcm_mod_ff_f;
+static float vcm_mod_lpf_f;
+static float vcm_iref_ff_f;
+static float vcm_iref_ff_z1;
 static uint8_t vcm_ifb_pi_primed;
+static uint8_t vcm_ff_l_primed;
+static uint16_t vcm_ocp_hits;
+
+static void VCM_FfStateReset(void)
+{
+  vcm_mod_ff_f = 0.0f;
+  vcm_iref_ff_f = 0.0f;
+  vcm_iref_ff_z1 = 0.0f;
+  vcm_ff_l_primed = 0U;
+  g_vcm.mod_ff = 0.0f;
+  g_vcm.mod_ff_l = 0.0f;
+}
 
 float VCM_AdcToIfbAmpere(uint16_t raw)
 {
@@ -50,8 +65,8 @@ int VCM_AdcStart(void)
     return -1;
   }
 
-  /* HAL_ADC_Start_DMA uses HAL_DMA_Start_IT: with NDTR=1 circular @100 kHz
-   * that is ~200 k IRQ/s and starves main/SysTick. Samples are read in
+  /* HAL_ADC_Start_DMA uses HAL_DMA_Start_IT: circular DMA @ PWM rate must not
+   * enable TC/HT IRQs or main/SysTick starve. Samples are read in the 50 kHz
    * VCM_CurrentLoop_IRQHandler — TC/HT IRQs are not needed. */
   __HAL_DMA_DISABLE_IT(hadc1.DMA_Handle, DMA_IT_TC | DMA_IT_HT);
   __HAL_DMA_DISABLE_IT(hadc2.DMA_Handle, DMA_IT_TC | DMA_IT_HT);
@@ -113,8 +128,9 @@ void VCM_Stop(void)
                                HRTIM_OUTPUT_TB1 | HRTIM_OUTPUT_TB2);
   g_vcm.integral = 0.0f;
   g_vcm.mod = 0.0f;
-  g_vcm.mod_ff = 0.0f;
-  vcm_mod_ff_f = 0.0f;
+  VCM_FfStateReset();
+  vcm_mod_lpf_f = 0.0f;
+  vcm_ocp_hits = 0U;
   g_vcm.ifb_pi_a = 0.0f;
   vcm_ifb_z1 = 0.0f;
   vcm_ifb_pi_primed = 0U;
@@ -131,6 +147,7 @@ void VCM_ClearFault(void)
 {
   g_vcm.fault_flags = 0U;
   g_vcm.state = VCM_STATE_IDLE;
+  vcm_ocp_hits = 0U;
   VCM_FaultPin_Set(false);
 }
 
@@ -183,6 +200,7 @@ void VCM_CalibrateIfbOffset(void)
   g_vcm.ifb_cal_acc = 0.0f;
   g_vcm.integral = 0.0f;
   g_vcm.mod = 0.0f;
+  vcm_mod_lpf_f = 0.0f;
   VCM_HRTIM_ApplyDuty((uint16_t)(VCM_PWM_PERIOD / 2U), (uint16_t)(VCM_PWM_PERIOD / 2U));
 
   if (g_vcm.state == VCM_STATE_IDLE)
@@ -207,6 +225,8 @@ void VCM_Start(void)
 
   g_vcm.integral = 0.0f;
   g_vcm.mod = 0.0f;
+  VCM_FfStateReset();
+  vcm_mod_lpf_f = 0.0f;
   g_vcm.iref_a = 0.0f;
   g_vcm.ifb_cal_count = 0U;
   g_vcm.ifb_cal_acc = 0.0f;
@@ -237,6 +257,7 @@ void VCM_CurrentLoop_IRQHandler(void)
   float err;
   float m;
   float m_ff;
+  float m_ff_l;
   float m_unsat;
   float dm;
   float iref_abs;
@@ -316,11 +337,22 @@ void VCM_CurrentLoop_IRQHandler(void)
     return;
   }
 
-  /* Hard OCP on corrected feedback */
+  /* Hard OCP on corrected feedback (debounce: ignore single-edge spikes) */
   if ((g_vcm.ifb_a > VCM_I_OCP_A) || (g_vcm.ifb_a < -VCM_I_OCP_A))
   {
-    VCM_EnterFault(2U);
-    return;
+    if (vcm_ocp_hits < 0xFFFFU)
+    {
+      vcm_ocp_hits++;
+    }
+    if (vcm_ocp_hits >= VCM_OCP_CONFIRM_SAMPLES)
+    {
+      VCM_EnterFault(2U);
+      return;
+    }
+  }
+  else
+  {
+    vcm_ocp_hits = 0U;
   }
 
   /* ---- Zero-offset calibration at 50% duty ---- */
@@ -328,6 +360,7 @@ void VCM_CurrentLoop_IRQHandler(void)
   {
     g_vcm.integral = 0.0f;
     g_vcm.mod = 0.0f;
+    vcm_mod_lpf_f = 0.0f;
     g_vcm.ifb_pi_a = g_vcm.ifb_a;
     vcm_ifb_z1 = g_vcm.ifb_a;
     VCM_HRTIM_ApplyDuty((uint16_t)(VCM_PWM_PERIOD / 2U), (uint16_t)(VCM_PWM_PERIOD / 2U));
@@ -341,8 +374,8 @@ void VCM_CurrentLoop_IRQHandler(void)
       g_vcm.ifb_cal_count = 0U;
       g_vcm.integral = 0.0f;
       g_vcm.mod = 0.0f;
-      g_vcm.mod_ff = 0.0f;
-      vcm_mod_ff_f = 0.0f;
+      VCM_FfStateReset();
+      vcm_mod_lpf_f = 0.0f;
       g_vcm.ifb_pi_a = 0.0f;
       vcm_ifb_z1 = 0.0f;
       vcm_ifb_pi_primed = 0U;
@@ -365,6 +398,9 @@ void VCM_CurrentLoop_IRQHandler(void)
     }
     g_vcm.integral = 0.0f;
     g_vcm.mod = m;
+    vcm_mod_lpf_f = m;
+    vcm_ff_l_primed = 0U;
+    g_vcm.mod_ff_l = 0.0f;
   }
   else
   {
@@ -373,26 +409,139 @@ void VCM_CurrentLoop_IRQHandler(void)
     /* Series sense: ifb_pi tracks continuously (adc_active_valid always 1). */
     err = g_vcm.iref_a - g_vcm.ifb_pi_a;
 
-    if ((iref_abs < VCM_IREF_NEAR_ZERO_A) &&
-        ((g_vcm.ifb_pi_a > VCM_IFB_UNEXPECTED_A) || (g_vcm.ifb_pi_a < -VCM_IFB_UNEXPECTED_A)))
+    if (iref_abs < VCM_IREF_NEAR_ZERO_A)
     {
+      float ifb_abs = (g_vcm.ifb_pi_a >= 0.0f) ? g_vcm.ifb_pi_a : -g_vcm.ifb_pi_a;
+
+      /* iref→0 while |ifb| still large: let L-FF brake alone (err=0).
+       * Stacking −ifb*Kp on top of L-FF caused overshoot; freezing L-FF
+       * immediately made the fall ~L/R (~300 µs). */
       g_vcm.integral = 0.0f;
-      err = -g_vcm.ifb_pi_a;
+      if (ifb_abs <= VCM_I_ERR_DEADBAND_A)
+      {
+        err = 0.0f;
+        vcm_mod_ff_f = 0.0f;
+        vcm_mod_lpf_f = 0.0f;
+      }
+      else if (ifb_abs > VCM_IFB_UNEXPECTED_A)
+      {
+        err = -g_vcm.ifb_pi_a * VCM_ZERO_BRAKE_KP_SCALE;
+      }
+      else
+      {
+        err = 0.0f;
+      }
+    }
+    else
+    {
+      float err_abs = (err >= 0.0f) ? err : -err;
+      if (err_abs < VCM_I_ERR_DEADBAND_A)
+      {
+        err = 0.0f;
+      }
     }
 
 #if VCM_FF_ENABLE
     /* Resistive drop FF + LPF: avoid instant m jump on iref step (undershoot). */
-    m_ff = g_vcm.iref_a * g_vcm.ff_mod_per_a;
-    vcm_mod_ff_f += VCM_FF_ALPHA * (m_ff - vcm_mod_ff_f);
-    m_ff = vcm_mod_ff_f;
+    if (iref_abs < VCM_IREF_NEAR_ZERO_A)
+    {
+      m_ff = 0.0f;
+      vcm_mod_ff_f = 0.0f;
+    }
+    else
+    {
+      float alpha_r = g_vcm.ff_alpha;
+      if (alpha_r < 0.0f)
+      {
+        alpha_r = 0.0f;
+      }
+      if (alpha_r > 1.0f)
+      {
+        alpha_r = 1.0f;
+      }
+      m_ff = g_vcm.iref_a * g_vcm.ff_mod_per_a;
+      vcm_mod_ff_f += alpha_r * (m_ff - vcm_mod_ff_f);
+      m_ff = vcm_mod_ff_f;
+    }
+#if VCM_FF_L_ENABLE
+    /* L·di/dt FF: differentiate raw iref (min phase lag), optional LPF on m_ff_l.
+     * Prefiltering iref before d/dt lagged the FF voltage and showed up as
+     * current lagging the command once scale was raised. */
+    {
+      float ifb_abs = (g_vcm.ifb_pi_a >= 0.0f) ? g_vcm.ifb_pi_a : -g_vcm.ifb_pi_a;
+
+      if ((iref_abs < VCM_IREF_NEAR_ZERO_A) && (ifb_abs <= VCM_I_ERR_DEADBAND_A))
+      {
+        vcm_iref_ff_f = 0.0f;
+        vcm_iref_ff_z1 = g_vcm.iref_a;
+        m_ff_l = 0.0f;
+      }
+      else if (vcm_ff_l_primed == 0U)
+      {
+        vcm_iref_ff_f = 0.0f;
+        vcm_iref_ff_z1 = g_vcm.iref_a;
+        vcm_ff_l_primed = 1U;
+        m_ff_l = 0.0f;
+      }
+      else
+      {
+        float diref;
+        float m_l_raw;
+        float alpha_l = g_vcm.ff_l_iref_alpha;
+        float lim_l = g_vcm.ff_l_mod_max;
+
+        if (alpha_l < 0.0f)
+        {
+          alpha_l = 0.0f;
+        }
+        if (alpha_l > 1.0f)
+        {
+          alpha_l = 1.0f;
+        }
+        if (lim_l < 0.0f)
+        {
+          lim_l = 0.0f;
+        }
+        if (lim_l > VCM_MOD_MAX)
+        {
+          lim_l = VCM_MOD_MAX;
+        }
+
+        diref = (g_vcm.iref_a - vcm_iref_ff_z1) * (float)VCM_CTRL_FREQ_HZ;
+        vcm_iref_ff_z1 = g_vcm.iref_a;
+        m_l_raw = g_vcm.ff_l_scale * VCM_COIL_L_H * diref / (2.0f * VCM_VBUS_V);
+        if (m_l_raw > lim_l)
+        {
+          m_l_raw = lim_l;
+        }
+        if (m_l_raw < -lim_l)
+        {
+          m_l_raw = -lim_l;
+        }
+
+        /* alpha=1 → m_ff_l follows raw (least lag); lower alpha softens noise. */
+        vcm_iref_ff_f += alpha_l * (m_l_raw - vcm_iref_ff_f);
+        m_ff_l = vcm_iref_ff_f;
+      }
+    }
+    g_vcm.mod_ff_l = m_ff_l;
+    m_ff += m_ff_l;
+#else
+    g_vcm.mod_ff_l = 0.0f;
+#endif
 #else
     m_ff = 0.0f;
     vcm_mod_ff_f = 0.0f;
+    g_vcm.mod_ff_l = 0.0f;
 #endif
     g_vcm.mod_ff = m_ff;
 
     m_unsat = g_vcm.kp * err + g_vcm.integral + m_ff;
-    if (iref_abs < VCM_IREF_I_HOLD_A)
+    if (iref_abs < VCM_IREF_NEAR_ZERO_A)
+    {
+      /* Integral already snapped above; do not re-accumulate on brake err. */
+    }
+    else if (iref_abs < VCM_IREF_I_HOLD_A)
     {
       g_vcm.integral *= (1.0f - VCM_I_LEAK_PER_PERIOD);
     }
@@ -420,17 +569,42 @@ void VCM_CurrentLoop_IRQHandler(void)
       m = -VCM_MOD_MAX;
     }
 
-    dm = m - g_vcm.mod;
-    if (dm > VCM_MOD_SLEW_PER_PERIOD)
     {
-      dm = VCM_MOD_SLEW_PER_PERIOD;
+      float alpha_m = g_vcm.mod_lpf_alpha;
+      float slew = g_vcm.mod_slew_per_period;
+
+      if (alpha_m < 0.0f)
+      {
+        alpha_m = 0.0f;
+      }
+      if (alpha_m > 1.0f)
+      {
+        alpha_m = 1.0f;
+      }
+      if (slew < 0.0f)
+      {
+        slew = 0.0f;
+      }
+      if (slew > VCM_MOD_MAX)
+      {
+        slew = VCM_MOD_MAX;
+      }
+
+      vcm_mod_lpf_f += alpha_m * (m - vcm_mod_lpf_f);
+      m = vcm_mod_lpf_f;
+
+      dm = m - g_vcm.mod;
+      if (dm > slew)
+      {
+        dm = slew;
+      }
+      if (dm < -slew)
+      {
+        dm = -slew;
+      }
+      m = g_vcm.mod + dm;
+      g_vcm.mod = m;
     }
-    if (dm < -VCM_MOD_SLEW_PER_PERIOD)
-    {
-      dm = -VCM_MOD_SLEW_PER_PERIOD;
-    }
-    m = g_vcm.mod + dm;
-    g_vcm.mod = m;
   }
 
   /* Dead-time compensation follows applied mod (same reason as ifb sign) */
@@ -467,13 +641,20 @@ void VCM_Init(void)
   g_vcm.ifb_offset_a = 0.0f;
   vcm_ifb_z1 = 0.0f;
   vcm_ifb_pi_primed = 0U;
+  vcm_ocp_hits = 0U;
   g_vcm.mod = 0.0f;
-  g_vcm.mod_ff = 0.0f;
-  vcm_mod_ff_f = 0.0f;
+  VCM_FfStateReset();
+  vcm_mod_lpf_f = 0.0f;
   g_vcm.integral = 0.0f;
   g_vcm.kp = VCM_KP;
   g_vcm.ki = VCM_KI;
   g_vcm.ff_mod_per_a = VCM_FF_MOD_PER_A;
+  g_vcm.ff_alpha = VCM_FF_ALPHA;
+  g_vcm.ff_l_scale = VCM_FF_L_SCALE;
+  g_vcm.ff_l_iref_alpha = VCM_FF_L_IREF_ALPHA;
+  g_vcm.ff_l_mod_max = VCM_FF_L_MOD_MAX;
+  g_vcm.mod_lpf_alpha = VCM_MOD_LPF_ALPHA;
+  g_vcm.mod_slew_per_period = VCM_MOD_SLEW_PER_PERIOD;
   g_vcm.state = VCM_STATE_IDLE;
   g_vcm.fault_flags = 0U;
   g_vcm.adc1_ovr_cnt = 0U;
@@ -499,7 +680,10 @@ static void VCM_ConfigHalfBridge(uint32_t timer_idx, uint32_t output1, uint32_t 
   HRTIM_DeadTimeCfgTypeDef pDeadTimeCfg = {0};
 
   pTimeBaseCfg.Period = VCM_PWM_PERIOD;
-  pTimeBaseCfg.RepetitionCounter = 0x00;
+  /* Timer A: REP IRQ at VCM_CTRL_FREQ_HZ; Timer B: no REP IRQ */
+  pTimeBaseCfg.RepetitionCounter = (timer_idx == HRTIM_TIMERINDEX_TIMER_A)
+                                       ? VCM_PWM_REPETITION
+                                       : 0x00U;
   pTimeBaseCfg.PrescalerRatio = HRTIM_PRESCALERRATIO_DIV1;
   pTimeBaseCfg.Mode = HRTIM_MODE_CONTINUOUS;
   if (HAL_HRTIM_TimeBaseConfig(&hhrtim, timer_idx, &pTimeBaseCfg) != HAL_OK)
