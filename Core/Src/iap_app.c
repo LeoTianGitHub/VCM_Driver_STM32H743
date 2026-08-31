@@ -32,5 +32,9 @@ void IAP_ServiceUartCommand(void)
   if ((cmd == IAP_CMD_ENTER_BOOT) || (cmd == IAP_CMD_UPGRADE))
   {
     IAP_RequestBootloader();
+    return;
   }
+
+  /* Gain-cal / force-current helpers (ASCII G F Z A) */
+  (void)VCM_ServiceUartCmd(cmd);
 }

@@ -52,7 +52,7 @@ MEMORY
   RAM_D1 (xrw)    : ORIGIN = 0x24000000,   LENGTH = 320K
   /* IAP layout: Boot 0x08000000..0x0801FFFF, App @ 0x08020000.
    * Keep VECT_TAB_OFFSET=0x20000 in system_stm32h7xx.c in sync. */
-  ROM    (rx)    : ORIGIN = 0x08020000,   LENGTH = 256K
+  ROM    (rx)    : ORIGIN = 0x08000000,   LENGTH = 256K
 }
 
 /* Sections */

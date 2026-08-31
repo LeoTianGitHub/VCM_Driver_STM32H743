@@ -15,7 +15,7 @@
 #include <stdint.h>
 
 #define IAP_BOOTLOADER_ADDRESS   0x08000000UL
-#define IAP_APP_ADDRESS          0x08020000UL
+#define IAP_APP_ADDRESS          0x08000000UL
 #define IAP_APP_MAX_SIZE         (256UL * 1024UL)
 #define IAP_KEY_BASE             0x0801FF00UL
 

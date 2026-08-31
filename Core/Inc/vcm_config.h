@@ -1,233 +1,121 @@
 /**
-
  * @file    vcm_config.h
-
- * @brief   VCM PWM current-loop parameters (STM32H743 + HRTIM)
-
+ * @brief   VCM current loop - PI + R/L FF, tri-level or bipolar PWM
  *
-
- * Flash: app linked at 0x08020000 for IAP_UartSTM32H7 (see iap_app.h).
- *
- * Operating envelope (this board/firmware):
- *   Bus VS = 48 V, command/loop full-scale I_MAX = 10 A (OCP 12 A).
- *   Z-VCM: L≈1188 µH, R≈3.62 Ω; series shunt RS=20 mΩ.
- *
- * Sense (rev):
- *   IFB  — coil series RS + TPA8001-SOAR → ADC1 differential
- *   IREF — ±10 V cmd via TPA2672 (G=0.15) → ADC2 differential
+ * Default: three-level (active leg chops, idle leg low-side ON).
+ * Set VCM_PWM_MODE to BIPOLAR for A/B compare. No command LPF.
  */
-
 #ifndef VCM_CONFIG_H
-
 #define VCM_CONFIG_H
-
-
 
 #include <stdint.h>
 
-
-
-/* Clock: HSI 64 MHz → PLL1P 480 MHz SYSCLK; HRTIM1CLK = CPUCLK = 480 MHz */
-
 #define VCM_SYSCLK_HZ           480000000UL
-
 #define VCM_HRTIM_CLOCK_HZ      480000000UL
 
-/* PWM 50 kHz (cut MOS switching loss vs 200 kHz); current loop same rate. */
-#define VCM_PWM_FREQ_HZ         50000UL
-#define VCM_CTRL_FREQ_HZ        50000UL
-#define VCM_PWM_PERIOD          ((uint16_t)(VCM_HRTIM_CLOCK_HZ / VCM_PWM_FREQ_HZ)) /* 9600 */
-/* REP = f_pwm/f_ctrl − 1 → 0 = IRQ every PWM period */
+#define VCM_PWM_FREQ_HZ         100000UL
+#define VCM_CTRL_FREQ_HZ        100000UL
+#define VCM_PWM_PERIOD          ((uint16_t)(VCM_HRTIM_CLOCK_HZ / VCM_PWM_FREQ_HZ)) /* 4800 */
 #define VCM_PWM_REPETITION      ((uint16_t)(VCM_PWM_FREQ_HZ / VCM_CTRL_FREQ_HZ - 1U))
 #define VCM_PWM_TS_S            (1.0f / (float)VCM_CTRL_FREQ_HZ)
 
-
-
-/* Dead-time: EG2132 provides ~150–350 ns; MCU DT = 0 */
-
 #define VCM_DT_PRESCALER        HRTIM_TIMDEADTIME_PRESCALERRATIO_DIV8
-
 #define VCM_DT_RISING           0U
-
 #define VCM_DT_FALLING          0U
 
-#define VCM_MOD_DT_COMP         0.01f
+#define VCM_MOD_MAX             0.48f
 
-#define VCM_DT_COMP_HYST_A      0.08f
+/* 0 = bipolar 0.5+/-m; 1 = three-level low-side freewheel (D=2*|m|) */
+#define VCM_PWM_MODE_BIPOLAR       0U
+#define VCM_PWM_MODE_TRILEVEL      1U
+#define VCM_PWM_MODE               VCM_PWM_MODE_TRILEVEL
 
-
-
-#define VCM_MOD_MAX             0.45f
-
-#define VCM_DUTY_MIN_COUNTS     ((uint16_t)(VCM_PWM_PERIOD * 0.05f))
-
-#define VCM_DUTY_MAX_COUNTS     ((uint16_t)(VCM_PWM_PERIOD * 0.95f))
-
-
+/* Sign hysteresis for tri-level leg swap (modulation units) */
+#define VCM_TRI_SIGN_ON_M          0.004f
+#define VCM_TRI_SIGN_OFF_M         0.002f
+/* Below this |m|, stay bipolar so AC zero-cross stays continuous */
+#define VCM_TRI_BIPOLAR_M          0.003f
 
 #define VCM_I_MAX_A             10.0f
-
 #define VCM_I_OCP_A             12.0f
-
-/* Raw IFB spike reject: 4 samples @ 50 kHz control ≈ 80 µs */
 #define VCM_OCP_CONFIRM_SAMPLES 4U
 
-
-
-/* 16-bit differential ADC, mid-scale = 0 Vdiff; VREF+ = 3.0 V */
-
 #define VCM_ADC_MID             32768.0f
-
 #define VCM_ADC_VREF_V          3.0f
-
 #define VCM_ADC_COUNTS_PER_V    (VCM_ADC_MID / VCM_ADC_VREF_V)
 
-
-
-/*
-
- * IFB: RS=20 mΩ, TPA8001 G=8.2 (±250 mV in → diff out)
-
- *   Vshunt/A = 0.02 V, Vadc_diff/A = 8.2*0.02 = 0.164 V
-
- *   At 10 A: Vshunt=0.20 V; at I_OCP 12 A: 0.24 V (within ±250 mV in)
-
- */
-
+/* IFB: RS + TPA8001 → ADC1. Adjust GAIN_TRIM after clamp meter vs g_vcm.ifb_a */
 #define VCM_IFB_RS_OHM          0.020f
-
 #define VCM_IFB_TPA8001_GAIN    8.2f
-
-#define VCM_IFB_V_PER_A         (VCM_IFB_TPA8001_GAIN * VCM_IFB_RS_OHM)
-
+#define VCM_IFB_GAIN_TRIM       1.0f
+#define VCM_IFB_V_PER_A         (VCM_IFB_GAIN_TRIM * VCM_IFB_TPA8001_GAIN * VCM_IFB_RS_OHM)
 #define VCM_IFB_COUNTS_PER_A    (VCM_IFB_V_PER_A * VCM_ADC_COUNTS_PER_V)
-
-/* Flip to -1.0f if closed-loop sign is inverted vs coil current */
-
 #define VCM_IFB_POLARITY        (-1.0f)
 
-
-
-/*
-
- * IREF: host ±10 V → ±I_MAX via TPA2672 → ADC2 diff.
-
- * Stage A G=0.15 + stage B invert about Vocm → Vdiff = 0.30 * Vin
-
- * (±10 V → ±3.0 V at VREF=3 V = full-scale)
-
- */
-
+/* IREF: ±10 V, TPA2672 Vdiff≈0.30·Vin → ±10 A. Trim after Vin vs iref_a */
 #define VCM_IREF_VIN_FULL_V     10.0f
-
-#define VCM_IREF_FRONT_GAIN     0.30f
-
-#define VCM_IREF_V_PER_A        (VCM_IREF_FRONT_GAIN * VCM_IREF_VIN_FULL_V / VCM_I_MAX_A)
-
+#define VCM_IREF_DIFF_GAIN      0.30f
+#define VCM_IREF_GAIN_TRIM      1.0f
+#define VCM_IREF_V_PER_A        (VCM_IREF_GAIN_TRIM * VCM_IREF_DIFF_GAIN * \
+                                 VCM_IREF_VIN_FULL_V / VCM_I_MAX_A)
 #define VCM_IREF_COUNTS_PER_A   (VCM_IREF_V_PER_A * VCM_ADC_COUNTS_PER_V)
-
-/* +1: host +cmd → +iref. -1: reverse without swapping motor leads.
- * Do NOT flip only PWM/m or only IFB — that breaks closed-loop sign. */
 #define VCM_IREF_POLARITY       (-1.0f)
 
+/* PI trim around plant FF */
+#define VCM_KP                  0.30f
+#define VCM_KI                  600.0f
+#define VCM_I_INTEGRAL_LIM      0.30f
 
-
-/* 50 kHz PWM/loop @ 48 V: m → Vcoil ≈ 2*m*Vbus. */
-#define VCM_KP                  0.08f
-#define VCM_KI                  400.0f
-#define VCM_I_INTEGRAL_LIM      VCM_MOD_MAX
-
-/* Plant FF defaults (copied into g_vcm at VCM_Init — Live Expressions can change).
- * Symmetric L·di/dt: same SCALE/ALPHA/lim for rise and fall. */
-#define VCM_COIL_R_OHM          3.62f
+/* Plant FF: bipolar Vcoil ≈ 2·m·Vbus. No LPF on FF. */
 #define VCM_COIL_L_H            0.001188f
+#define VCM_COIL_R_OHM          3.62f
 #define VCM_VBUS_V              48.0f
-#define VCM_FF_ENABLE           1
-#define VCM_FF_SCALE            0.70f
-#define VCM_FF_ALPHA            0.25f
-#define VCM_FF_MOD_PER_A        (VCM_FF_SCALE * (VCM_COIL_R_OHM + VCM_IFB_RS_OHM) / (2.0f * VCM_VBUS_V))
-#define VCM_FF_L_ENABLE         1
-#define VCM_FF_L_SCALE          1.00f
-/* Post-filter on m_ff_l (1.0 = no lag). Do NOT prefilter iref before d/dt —
- * that caused large phase lag at 3 kHz when scale was raised. */
-#define VCM_FF_L_IREF_ALPHA     1.00f
-/* lim 0.15 → |V|≈14 V → 0.5 A theoretical ~40 µs; LPF/α → ~80–120 µs both ways. */
-#define VCM_FF_L_MOD_MAX        0.15f
+#define VCM_FF_SCALE            1.0f
+#define VCM_L_FF_SCALE          0.85f
+#define VCM_FF_MOD_PER_A        (VCM_FF_SCALE * (VCM_COIL_R_OHM + VCM_IFB_RS_OHM) / \
+                                 (2.0f * VCM_VBUS_V))
+#define VCM_L_FF_MOD_PER_A      (VCM_L_FF_SCALE * VCM_COIL_L_H / (2.0f * VCM_VBUS_V))
 
-/* Series shunt: edge-glitch reject into PI.
- * ALPHA at 50 kHz: 0.24 → τ≈83 µs (same as 0.12 @ 100 kHz). */
-#define VCM_IFB_SPIKE_A         5.0f
-#define VCM_IFB_PI_ALPHA        0.24f
+/* True standstill only — do not trip on 200 Hz zero-cross */
+#define VCM_IDLE_ENTER_A           0.020f
+#define VCM_IDLE_EXIT_A            0.035f
+#define VCM_IDLE_ENTER_DEB         10000U /* 100 ms @ 100 kHz */
 
-/* Hold PI when |iref-ifb| is within ADC/ripple (steady-state hiss).
- * Large steps (|err|>>deadband) are unchanged. */
-#define VCM_I_ERR_DEADBAND_A    0.04f
+#define VCM_IFB_CAL_SAMPLES        200U   /* ~2 ms @ 100 kHz */
+#define VCM_IREF_OFFSET_MAX_A      0.050f
 
-/* Same mod LPF on rise and fall. */
-#define VCM_MOD_LPF_ALPHA       0.40f
-
-/* Only used if L-FF finished and a trickle of current remains. */
-#define VCM_ZERO_BRAKE_KP_SCALE 0.25f
-
-
-
-/* 0 = use ADC2 command; 1 = iref_override_a (debug) */
-
-#define VCM_IREF_OVERRIDE_DEFAULT    0
-
-#define VCM_IREF_OVERRIDE_A_DEFAULT  0.0f
-
-#define VCM_MOD_OVERRIDE_DEFAULT     0
-
-#define VCM_MOD_OVERRIDE_A_DEFAULT   0.0f
-
-
-
-#define VCM_IFB_CAL_SAMPLES        512U
-
-#define VCM_IREF_I_HOLD_A          0.05f
-
-/* Slow leak only while |iref| is small but not in hard zero-hold. */
-#define VCM_I_LEAK_PER_PERIOD      0.05f
-
-/* Same slew limit both directions (was rise=MOD_MAX, fall=0.05 → asymmetric). */
-#define VCM_MOD_SLEW_PER_PERIOD    0.08f
-
-/* |iref| below this: brake residual current to 0, then snap integral/FF. */
-#define VCM_IREF_NEAR_ZERO_A       0.05f
-
-/* Legacy: huge |ifb| with zero command (sense fault). Still clears integral. */
-#define VCM_IFB_UNEXPECTED_A       3.5f
-
-
-
-/* Keep ADC trigger away from PWM edges @ PERIOD=9600 (~1 µs) */
 #define VCM_ADC_TRIG_EDGE_MARGIN   480U
 
-
-
-/* DRV_EN active-low (board pull-up) */
+/* Gain-cal: UART force current (clamp meter) and rolling mean window */
+#define VCM_CAL_FORCE_A            0.50f
+#define VCM_CAL_AVG_ALPHA          (1.0f / 5120.0f) /* ~51 ms EMA @ 100 kHz */
 
 #define VCM_DRV_EN_Pin             GPIO_PIN_0
-
 #define VCM_DRV_EN_GPIO_Port       GPIOB
-
 #define VCM_DRV_EN_ACTIVE_LEVEL    GPIO_PIN_RESET
-
 #define VCM_FAULT_Pin              GPIO_PIN_1
-
 #define VCM_FAULT_GPIO_Port        GPIOB
-
 #define VCM_FAULT_ACTIVE_LEVEL     GPIO_PIN_SET
-
 #define VCM_FAULT_INACTIVE_LEVEL   GPIO_PIN_RESET
-
 #define VCM_PROCESS_LED_Pin        GPIO_PIN_3
-
 #define VCM_PROCESS_LED_GPIO_Port  GPIOE
 
+#define VCM_EN_GLITCH_SAMPLES   8U
+#define VCM_EN_OFF_DEBOUNCE_MS  2U
+#define VCM_CAL_REUSE_MS        5000U
 
+#define VCM_DIAG_EN             1
+#define VCM_DIAG_STEP_A         0.20f
+#define VCM_DIAG_DONE_BAND      0.10f
+#define VCM_DIAG_TIMEOUT_TICKS  2000U  /* 20 ms @ 100 kHz */
+#define VCM_DIAG_UART_MARK      0
+
+/* UART cal cmds (ASCII; avoid 0x05 / 0xA0 used by IAP) */
+#define VCM_UART_CMD_GAIN       ((uint8_t)'G')  /* print iref/ifb means */
+#define VCM_UART_CMD_FORCE      ((uint8_t)'F')  /* override IREF = CAL_FORCE_A */
+#define VCM_UART_CMD_ZERO       ((uint8_t)'Z')  /* override IREF = 0 */
+#define VCM_UART_CMD_ANALOG     ((uint8_t)'A')  /* clear override, use ADC */
+#define VCM_UART_CMD_BIPOLAR    ((uint8_t)'B')  /* pwm_mode = bipolar */
+#define VCM_UART_CMD_TRILEVEL   ((uint8_t)'T')  /* pwm_mode = three-level */
 
 #endif /* VCM_CONFIG_H */
-
-

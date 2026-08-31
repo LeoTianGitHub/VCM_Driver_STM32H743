@@ -346,7 +346,7 @@ static void MX_ADC1_Init(void)
   */
   sConfig.Channel = ADC_CHANNEL_16;
   sConfig.Rank = ADC_REGULAR_RANK_1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_16CYCLES_5;
+  sConfig.SamplingTime = ADC_SAMPLETIME_64CYCLES_5;
   sConfig.SingleDiff = ADC_DIFFERENTIAL_ENDED;
   sConfig.OffsetNumber = ADC_OFFSET_NONE;
   sConfig.Offset = 0;
@@ -368,7 +368,7 @@ static void MX_ADC1_Init(void)
   }
   sConfig.Channel = ADC_CHANNEL_16;
   sConfig.Rank = ADC_REGULAR_RANK_1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_16CYCLES_5;
+  sConfig.SamplingTime = ADC_SAMPLETIME_64CYCLES_5;
   sConfig.SingleDiff = ADC_DIFFERENTIAL_ENDED;
   sConfig.OffsetNumber = ADC_OFFSET_NONE;
   sConfig.Offset = 0;
@@ -426,7 +426,7 @@ static void MX_ADC2_Init(void)
   */
   sConfig.Channel = ADC_CHANNEL_3;
   sConfig.Rank = ADC_REGULAR_RANK_1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_16CYCLES_5;
+  sConfig.SamplingTime = ADC_SAMPLETIME_64CYCLES_5;
   sConfig.SingleDiff = ADC_DIFFERENTIAL_ENDED;
   sConfig.OffsetNumber = ADC_OFFSET_NONE;
   sConfig.Offset = 0;
@@ -447,7 +447,7 @@ static void MX_ADC2_Init(void)
   }
   sConfig.Channel = ADC_CHANNEL_3;
   sConfig.Rank = ADC_REGULAR_RANK_1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_16CYCLES_5;
+  sConfig.SamplingTime = ADC_SAMPLETIME_64CYCLES_5;
   sConfig.SingleDiff = ADC_DIFFERENTIAL_ENDED;
   sConfig.OffsetNumber = ADC_OFFSET_NONE;
   sConfig.Offset = 0;
@@ -552,7 +552,7 @@ static void MX_HRTIM_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN HRTIM_Init 2 */
-  /* Real 50 kHz / dead-time applied by VCM_HRTIM_InitTimers() after this. */
+  /* Real 30 kHz / dead-time applied by VCM_HRTIM_InitTimers() after this. */
   /* USER CODE END HRTIM_Init 2 */
   HAL_HRTIM_MspPostInit(&hhrtim);
 
@@ -675,7 +675,14 @@ static void MX_GPIO_Init(void)
   HAL_NVIC_EnableIRQ(DRV_EN_EXTI_IRQn);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
-
+  /* Keep after Cube regen (generated block sets NOPULL):
+   * DRV_EN is active-low and comes from a long host wire. Without a pull-up a
+   * floating/glitching line toggles enable -> VCM_Stop() -> VCM_Start() ->
+   * 2.56 ms IFB recalibration, which shows up as an ms-scale dead zone. */
+  GPIO_InitStruct.Pin = DRV_EN_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(DRV_EN_GPIO_Port, &GPIO_InitStruct);
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
