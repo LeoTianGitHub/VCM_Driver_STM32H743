@@ -639,13 +639,13 @@ void VCM_CurrentLoop_IRQHandler(void)
   {
     iref = VCM_AdcToIrefAmpere(g_vcm.adc_iref) - g_vcm.iref_offset_a;
   }
-  if (iref > VCM_I_MAX_A)
+  if (iref > VCM_I_CMD_MAX_A)
   {
-    iref = VCM_I_MAX_A;
+    iref = VCM_I_CMD_MAX_A;
   }
-  if (iref < -VCM_I_MAX_A)
+  if (iref < -VCM_I_CMD_MAX_A)
   {
-    iref = -VCM_I_MAX_A;
+    iref = -VCM_I_CMD_MAX_A;
   }
   g_vcm.iref_a = iref;
 
@@ -859,7 +859,7 @@ static void VCM_UartWriteMilli(float a)
  *   A — clear force, use analog IREF
  *
  * After F: clamp_meter_A / firmware_ifb_mA → next IFB_GAIN_TRIM.
- * After known Vin: (Vin/10*10) / firmware_iref → IREF_GAIN_TRIM.
+ * After known Vin: (Vin/20*1) / firmware_iref → IREF_GAIN_TRIM.
  */
 uint8_t VCM_ServiceUartCmd(uint8_t cmd)
 {

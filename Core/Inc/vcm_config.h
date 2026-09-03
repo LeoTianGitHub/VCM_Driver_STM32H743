@@ -36,8 +36,12 @@
 /* Below this |m|, stay bipolar so AC zero-cross stays continuous */
 #define VCM_TRI_BIPOLAR_M          0.003f
 
-#define VCM_I_MAX_A             10.0f
-#define VCM_I_OCP_A             12.0f
+/*
+ * IREF map: host ±20 V -> op-amp G=0.15 -> ±3 V at ADC -> ±1 A.
+ */
+#define VCM_I_MAX_A             1.0f
+#define VCM_I_CMD_MAX_A         1.0f
+#define VCM_I_OCP_A             1.2f
 #define VCM_OCP_CONFIRM_SAMPLES 4U
 
 #define VCM_ADC_MID             32768.0f
@@ -52,12 +56,12 @@
 #define VCM_IFB_COUNTS_PER_A    (VCM_IFB_V_PER_A * VCM_ADC_COUNTS_PER_V)
 #define VCM_IFB_POLARITY        (-1.0f)
 
-/* IREF: ±10 V, TPA2672 Vdiff≈0.30·Vin → ±10 A. Trim after Vin vs iref_a */
-#define VCM_IREF_VIN_FULL_V     10.0f
-#define VCM_IREF_DIFF_GAIN      0.30f
+/* IREF: ±20 V * 0.15 → ±3 V ADC = ±1 A */
+#define VCM_IREF_VIN_FULL_V     20.0f
+#define VCM_IREF_DIFF_GAIN      0.15f   /* front-end op-amp gain */
 #define VCM_IREF_GAIN_TRIM      1.0f
 #define VCM_IREF_V_PER_A        (VCM_IREF_GAIN_TRIM * VCM_IREF_DIFF_GAIN * \
-                                 VCM_IREF_VIN_FULL_V / VCM_I_MAX_A)
+                                 VCM_IREF_VIN_FULL_V / VCM_I_MAX_A) /* 3.0 V/A */
 #define VCM_IREF_COUNTS_PER_A   (VCM_IREF_V_PER_A * VCM_ADC_COUNTS_PER_V)
 #define VCM_IREF_POLARITY       (-1.0f)
 
@@ -67,8 +71,8 @@
 #define VCM_I_INTEGRAL_LIM      0.30f
 
 /* Plant FF: bipolar Vcoil ≈ 2·m·Vbus. No LPF on FF. */
-#define VCM_COIL_L_H            0.001188f
-#define VCM_COIL_R_OHM          3.62f
+#define VCM_COIL_L_H            0.000912f /* 912 µH */
+#define VCM_COIL_R_OHM          5.42f
 #define VCM_VBUS_V              48.0f
 #define VCM_FF_SCALE            1.0f
 #define VCM_L_FF_SCALE          0.85f
