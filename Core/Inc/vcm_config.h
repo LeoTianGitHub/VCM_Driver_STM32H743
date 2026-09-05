@@ -1,9 +1,9 @@
 /**
  * @file    vcm_config.h
- * @brief   VCM current loop - PI + R/L FF, tri-level or bipolar PWM
+ * @brief   VCM current loop - PI + R/L FF, bipolar PWM (small-current linearity)
  *
- * Default: three-level (active leg chops, idle leg low-side ON).
- * Set VCM_PWM_MODE to BIPOLAR for A/B compare. No command LPF.
+ * Default: bipolar 0.5+/-m for the whole current range. No idle clamp.
+ * UART T/B can still switch tri-level for A/B compare. No command LPF.
  */
 #ifndef VCM_CONFIG_H
 #define VCM_CONFIG_H
@@ -28,7 +28,7 @@
 /* 0 = bipolar 0.5+/-m; 1 = three-level low-side freewheel (D=2*|m|) */
 #define VCM_PWM_MODE_BIPOLAR       0U
 #define VCM_PWM_MODE_TRILEVEL      1U
-#define VCM_PWM_MODE               VCM_PWM_MODE_TRILEVEL
+#define VCM_PWM_MODE               VCM_PWM_MODE_BIPOLAR
 
 /* Sign hysteresis for tri-level leg swap (modulation units) */
 #define VCM_TRI_SIGN_ON_M          0.004f
@@ -80,7 +80,11 @@
                                  (2.0f * VCM_VBUS_V))
 #define VCM_L_FF_MOD_PER_A      (VCM_L_FF_SCALE * VCM_COIL_L_H / (2.0f * VCM_VBUS_V))
 
-/* True standstill only — do not trip on 200 Hz zero-cross */
+/*
+ * 0: keep PWM at standstill (no software dead zone; position loop can hold).
+ * 1: clamp after |IREF| < ENTER for DEB samples (quiet idle, may hunt at zero).
+ */
+#define VCM_IDLE_CLAMP_EN          0U
 #define VCM_IDLE_ENTER_A           0.020f
 #define VCM_IDLE_EXIT_A            0.035f
 #define VCM_IDLE_ENTER_DEB         10000U /* 100 ms @ 100 kHz */
