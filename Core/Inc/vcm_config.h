@@ -1,9 +1,9 @@
 /**
  * @file    vcm_config.h
- * @brief   VCM current loop - PI + R/L FF, tri-level or bipolar PWM
+ * @brief   VCM current loop - PI + R/L FF, tri-level PWM @ 50 kHz
  *
- * Default: three-level (active leg chops, idle leg low-side ON).
- * Set VCM_PWM_MODE to BIPOLAR for A/B compare. No command LPF.
+ * Wire-feed motor test branch: three-level default, 50 kHz PWM/loop.
+ * UART B/T can switch bipolar for A/B compare. No command LPF.
  */
 #ifndef VCM_CONFIG_H
 #define VCM_CONFIG_H
@@ -13,9 +13,9 @@
 #define VCM_SYSCLK_HZ           480000000UL
 #define VCM_HRTIM_CLOCK_HZ      480000000UL
 
-#define VCM_PWM_FREQ_HZ         100000UL
-#define VCM_CTRL_FREQ_HZ        100000UL
-#define VCM_PWM_PERIOD          ((uint16_t)(VCM_HRTIM_CLOCK_HZ / VCM_PWM_FREQ_HZ)) /* 4800 */
+#define VCM_PWM_FREQ_HZ         50000UL
+#define VCM_CTRL_FREQ_HZ        50000UL
+#define VCM_PWM_PERIOD          ((uint16_t)(VCM_HRTIM_CLOCK_HZ / VCM_PWM_FREQ_HZ)) /* 9600 */
 #define VCM_PWM_REPETITION      ((uint16_t)(VCM_PWM_FREQ_HZ / VCM_CTRL_FREQ_HZ - 1U))
 #define VCM_PWM_TS_S            (1.0f / (float)VCM_CTRL_FREQ_HZ)
 
@@ -83,16 +83,16 @@
 /* True standstill only — do not trip on 200 Hz zero-cross */
 #define VCM_IDLE_ENTER_A           0.020f
 #define VCM_IDLE_EXIT_A            0.035f
-#define VCM_IDLE_ENTER_DEB         10000U /* 100 ms @ 100 kHz */
+#define VCM_IDLE_ENTER_DEB         5000U  /* 100 ms @ 50 kHz */
 
-#define VCM_IFB_CAL_SAMPLES        200U   /* ~2 ms @ 100 kHz */
+#define VCM_IFB_CAL_SAMPLES        100U   /* ~2 ms @ 50 kHz */
 #define VCM_IREF_OFFSET_MAX_A      0.050f
 
 #define VCM_ADC_TRIG_EDGE_MARGIN   480U
 
 /* Gain-cal: UART force current (clamp meter) and rolling mean window */
 #define VCM_CAL_FORCE_A            0.50f
-#define VCM_CAL_AVG_ALPHA          (1.0f / 5120.0f) /* ~51 ms EMA @ 100 kHz */
+#define VCM_CAL_AVG_ALPHA          (1.0f / 2560.0f) /* ~51 ms EMA @ 50 kHz */
 
 #define VCM_DRV_EN_Pin             GPIO_PIN_0
 #define VCM_DRV_EN_GPIO_Port       GPIOB
@@ -111,7 +111,7 @@
 #define VCM_DIAG_EN             1
 #define VCM_DIAG_STEP_A         0.20f
 #define VCM_DIAG_DONE_BAND      0.10f
-#define VCM_DIAG_TIMEOUT_TICKS  2000U  /* 20 ms @ 100 kHz */
+#define VCM_DIAG_TIMEOUT_TICKS  1000U  /* 20 ms @ 50 kHz */
 #define VCM_DIAG_UART_MARK      0
 
 /* UART cal cmds (ASCII; avoid 0x05 / 0xA0 used by IAP) */

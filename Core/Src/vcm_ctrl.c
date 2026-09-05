@@ -458,7 +458,7 @@ void VCM_ServiceDrvEnable(void)
   if (!VCM_IsDrvEnActive())
   {
     /*
-     * Time-based debounce. The 100 kHz ISR tears the drive down faster (~80 us,
+     * Time-based debounce. The 50 kHz ISR tears the drive down faster (~160 us,
      * VCM_EN_GLITCH_SAMPLES); this path only matters if the ISR is not running.
      * Without the debounce, a single glitch here restarts IFB recalibration
      * and the drive is blind while it runs.
@@ -541,7 +541,7 @@ void VCM_Start(void)
 
 #if VCM_DIAG_EN
 /*
- * Read-only observation: how many ISR ticks (10 us each @ 100 kHz) the loop needs from an
+ * Read-only observation: how many ISR ticks (20 us each @ 50 kHz) the loop needs from an
  * IREF step — as the firmware sees it — until the current settles inside
  * VCM_DIAG_DONE_BAND. Nothing here feeds back into the loop.
  *   small number  -> loop and plant are fine, the delay is upstream
