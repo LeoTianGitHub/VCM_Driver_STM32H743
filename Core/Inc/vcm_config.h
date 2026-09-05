@@ -28,13 +28,17 @@
 /* 0 = bipolar 0.5+/-m; 1 = three-level low-side freewheel (D=2*|m|) */
 #define VCM_PWM_MODE_BIPOLAR       0U
 #define VCM_PWM_MODE_TRILEVEL      1U
-#define VCM_PWM_MODE               VCM_PWM_MODE_TRILEVEL
+#define VCM_PWM_MODE               VCM_PWM_MODE_BIPOLAR
 
-/* Sign hysteresis for tri-level leg swap (modulation units) */
-#define VCM_TRI_SIGN_ON_M          0.004f
-#define VCM_TRI_SIGN_OFF_M         0.002f
-/* Below this |m|, stay bipolar so AC zero-cross stays continuous */
-#define VCM_TRI_BIPOLAR_M          0.003f
+/*
+ * Prefer bipolar at small |m| for current linearity (fine ~20 mV steps).
+ * Tri-level only after a clear bias so min-pulse quantization is out of the
+ * small-current band. Hysteresis avoids chatter at the mode switch.
+ * With R≈3.62 Ω: |m|=0.015 ≈ 0.4 A, 0.020 ≈ 0.5 A.
+ */
+#define VCM_TRI_SIGN_ON_M          0.020f
+#define VCM_TRI_SIGN_OFF_M         0.012f
+#define VCM_TRI_BIPOLAR_M          0.015f
 
 #define VCM_I_MAX_A             10.0f
 #define VCM_I_OCP_A             12.0f
@@ -76,7 +80,11 @@
                                  (2.0f * VCM_VBUS_V))
 #define VCM_L_FF_MOD_PER_A      (VCM_L_FF_SCALE * VCM_COIL_L_H / (2.0f * VCM_VBUS_V))
 
-/* True standstill only — do not trip on 200 Hz zero-cross */
+/*
+ * 0: keep PWM at standstill (no software dead zone; position loop can hold).
+ * 1: clamp after |IREF| < ENTER for DEB samples (quiet idle, may hunt at zero).
+ */
+#define VCM_IDLE_CLAMP_EN          0U
 #define VCM_IDLE_ENTER_A           0.020f
 #define VCM_IDLE_EXIT_A            0.035f
 #define VCM_IDLE_ENTER_DEB         10000U /* 100 ms @ 100 kHz */

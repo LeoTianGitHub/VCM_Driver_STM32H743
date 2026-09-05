@@ -63,7 +63,7 @@ static void VCM_LoopStateReset(void)
 
 /*
  * m = Kp*e + Ki*∫e + R·I_ff + L·di/dt_ff
- * Long-idle clamp for true standstill only (not AC zero-cross).
+ * Idle clamp optional: when disabled, PWM stays on at IREF=0 (no software dead zone).
  */
 static float VCM_PiStep(float ref, float fdbk)
 {
@@ -74,6 +74,7 @@ static float VCM_PiStep(float ref, float fdbk)
   float di_dt;
   float ref_abs = VCM_Absf(ref);
 
+#if VCM_IDLE_CLAMP_EN
   if (g_vcm.pwm_armed != 0U)
   {
     if (ref_abs < VCM_IDLE_ENTER_A)
@@ -114,6 +115,11 @@ static float VCM_PiStep(float ref, float fdbk)
       return 0.0f;
     }
   }
+#else
+  (void)ref_abs;
+  g_vcm.pwm_armed = 1U;
+  vcm_idle_deb = 0U;
+#endif
 
   err = ref - fdbk;
   di_dt = (ref - vcm_iref_z1) * (float)VCM_CTRL_FREQ_HZ;
