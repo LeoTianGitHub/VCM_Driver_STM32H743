@@ -675,14 +675,7 @@ static void MX_GPIO_Init(void)
   HAL_NVIC_EnableIRQ(DRV_EN_EXTI_IRQn);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
-  /* Keep after Cube regen (generated block sets NOPULL):
-   * DRV_EN is active-low and comes from a long host wire. Without a pull-up a
-   * floating/glitching line toggles enable -> VCM_Stop() -> VCM_Start() ->
-   * 2.56 ms IFB recalibration, which shows up as an ms-scale dead zone. */
-  GPIO_InitStruct.Pin = DRV_EN_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  HAL_GPIO_Init(DRV_EN_GPIO_Port, &GPIO_InitStruct);
+  /* DRV_EN: internal NOPULL — board has an external pull-up. */
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
