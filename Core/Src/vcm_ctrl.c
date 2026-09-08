@@ -199,13 +199,13 @@ static void VCM_FaultPin_Set(bool fault_active)
                     fault_active ? VCM_FAULT_ACTIVE_LEVEL : VCM_FAULT_INACTIVE_LEVEL);
 }
 
-/* Two ADCTRG1 edges: TA CMP2 = +coast, TB CMP3 = -coast. Do not slide
- * one trigger into the other coast — only clamp and keep min separation. */
+/* Two ADCTRG1 edges: TA CMP2 then TB CMP3 (coast or ON-pulse body). */
 static void VCM_HRTIM_SetAdcTrigs2(uint16_t t_plus, uint16_t t_minus)
 {
-  const uint16_t sep = VCM_ADC_CONV_GUARD;
-  const uint16_t lo = VCM_ADC_TRIG_EDGE_MARGIN;
-  const uint16_t hi = (uint16_t)(VCM_PWM_PERIOD - VCM_ADC_TRIG_EDGE_MARGIN);
+  /* Placement already insets from PWM edges. Do not re-clamp to 1 us from
+   * period ends — that would shove a short-pulse trigger onto a switching edge. */
+  const uint16_t lo = 2U;
+  const uint16_t hi = (uint16_t)(VCM_PWM_PERIOD - 3U);
 
   if (t_plus < lo)
   {
@@ -222,14 +222,6 @@ static void VCM_HRTIM_SetAdcTrigs2(uint16_t t_plus, uint16_t t_minus)
   if (t_minus > hi)
   {
     t_minus = hi;
-  }
-  if (t_minus < (uint16_t)(t_plus + sep))
-  {
-    uint16_t pushed = (uint16_t)(t_plus + sep);
-    if (pushed <= hi)
-    {
-      t_minus = pushed;
-    }
   }
 
   __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_COMPAREUNIT_2, t_plus);
@@ -323,6 +315,91 @@ static uint16_t VCM_AdcTrigQuiet(uint16_t edge_cnt)
     trig = (uint16_t)(period - mar);
   }
   return trig;
+}
+
+static uint8_t VCM_CoastFits(uint16_t after_edge, uint16_t before_edge)
+{
+  if (before_edge <= after_edge)
+  {
+    return 0U;
+  }
+  return ((uint16_t)(before_edge - after_edge) >= VCM_ADC_MIN_COAST) ? 1U : 0U;
+}
+
+/* Entire S&H window inside MOS ON [start, start+len), inset from both edges.
+ * Returns 0xFFFF if the pulse is too short. */
+static uint16_t VCM_OnPulseTrig(uint16_t start, uint16_t len)
+{
+  const uint16_t mar = VCM_ADC_ON_EDGE_MARGIN;
+  const uint16_t smp = VCM_ADC_SMP_DELAY;
+  uint16_t trig_lo;
+  uint16_t trig_hi;
+  uint16_t hold;
+  uint16_t trig;
+
+  if (len <= (uint16_t)((2U * mar) + smp))
+  {
+    return 0xFFFFU;
+  }
+
+  trig_lo = (uint16_t)(start + mar);
+  trig_hi = (uint16_t)(start + len - mar - smp);
+
+  hold = (uint16_t)(start + (len / 2U));
+  if (hold > smp)
+  {
+    trig = (uint16_t)(hold - smp);
+  }
+  else
+  {
+    trig = 0U;
+  }
+  if (trig < trig_lo)
+  {
+    trig = trig_lo;
+  }
+  if (trig > trig_hi)
+  {
+    trig = trig_hi;
+  }
+  return trig;
+}
+
+static void VCM_OnPulsePair(uint16_t start, uint16_t len, uint16_t *t0, uint16_t *t1)
+{
+  const uint16_t mar = VCM_ADC_ON_EDGE_MARGIN;
+  const uint16_t smp = VCM_ADC_SMP_DELAY;
+  const uint16_t sep = VCM_ADC_CONV_GUARD;
+  uint16_t lo;
+  uint16_t hi;
+  uint16_t span;
+
+  lo = (uint16_t)(start + mar);
+  if (len > (uint16_t)(mar + smp))
+  {
+    hi = (uint16_t)(start + len - mar - smp);
+  }
+  else
+  {
+    hi = lo;
+  }
+  if (hi <= lo)
+  {
+    *t0 = lo;
+    *t1 = (uint16_t)(lo + sep);
+    return;
+  }
+  span = (uint16_t)(hi - lo);
+  *t0 = (uint16_t)(lo + (span / 3U));
+  *t1 = (uint16_t)(lo + ((2U * span) / 3U));
+  if (*t1 < (uint16_t)(*t0 + sep))
+  {
+    uint16_t pushed = (uint16_t)(*t0 + sep);
+    if (pushed <= hi)
+    {
+      *t1 = pushed;
+    }
+  }
 }
 
 /* Hold instant = quiet-coast midpoint. Trigger earlier by SMP_DELAY so
@@ -540,19 +617,54 @@ static void VCM_HRTIM_ApplyDuty(float m)
     VCM_HRTIM_PulseStart(HRTIM_TIMERINDEX_TIMER_A, cnt_a);
     VCM_HRTIM_PulseWindow(HRTIM_TIMERINDEX_TIMER_B, start_b, cnt_b);
 
-    /* One sample in +coast, one in -coast. Mean cancels I+/I- dither bias. */
+    /* Prefer mid-coast. If a coast is too short, sample inside that polarity's
+     * MOS ON pulse (series CSA is valid while conducting), never on an edge. */
     {
       uint16_t tp;
       uint16_t tn;
+      uint16_t end_b = (uint16_t)(start_b + cnt_b);
 
-      tp = VCM_CoastMid(cnt_a, start_b);
-      tn = VCM_CoastMid((uint16_t)(start_b + cnt_b), VCM_PWM_PERIOD);
-      vcm_coast_wp = (start_b > cnt_a) ? (uint16_t)(start_b - cnt_a) : 1U;
+      if (VCM_CoastFits(cnt_a, start_b) != 0U)
       {
-        uint16_t end_b = (uint16_t)(start_b + cnt_b);
+        tp = VCM_CoastMid(cnt_a, start_b);
+        vcm_coast_wp = (start_b > cnt_a) ? (uint16_t)(start_b - cnt_a) : 1U;
+      }
+      else
+      {
+        tp = VCM_OnPulseTrig(0U, cnt_a);
+        vcm_coast_wp = (cnt_a > 0U) ? cnt_a : 1U;
+      }
+
+      if (VCM_CoastFits(end_b, VCM_PWM_PERIOD) != 0U)
+      {
+        tn = VCM_CoastMid(end_b, VCM_PWM_PERIOD);
         vcm_coast_wn = (VCM_PWM_PERIOD > end_b)
                            ? (uint16_t)(VCM_PWM_PERIOD - end_b) : 1U;
       }
+      else
+      {
+        tn = VCM_OnPulseTrig(start_b, cnt_b);
+        vcm_coast_wn = (cnt_b > 0U) ? cnt_b : 1U;
+      }
+
+      if ((tp == 0xFFFFU) || (tn == 0xFFFFU))
+      {
+        if (cnt_a >= cnt_b)
+        {
+          VCM_OnPulsePair(0U, cnt_a, &tp, &tn);
+          vcm_coast_wp = (cnt_a > 1U) ? (uint16_t)(cnt_a / 2U) : 1U;
+          vcm_coast_wn = (cnt_a > vcm_coast_wp)
+                             ? (uint16_t)(cnt_a - vcm_coast_wp) : 1U;
+        }
+        else
+        {
+          VCM_OnPulsePair(start_b, cnt_b, &tp, &tn);
+          vcm_coast_wp = (cnt_b > 1U) ? (uint16_t)(cnt_b / 2U) : 1U;
+          vcm_coast_wn = (cnt_b > vcm_coast_wp)
+                             ? (uint16_t)(cnt_b - vcm_coast_wp) : 1U;
+        }
+      }
+
       g_vcm.adc_active_valid = 1U;
       VCM_HRTIM_SetAdcTrigs2(tp, tn);
     }

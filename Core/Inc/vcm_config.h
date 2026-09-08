@@ -102,16 +102,21 @@
 #define VCM_IFB_CAL_SAMPLES        100U   /* ~2 ms @ 50 kHz; used only if ENABLE_CAL */
 #define VCM_IREF_OFFSET_MAX_A      0.050f
 
-#define VCM_ADC_TRIG_EDGE_MARGIN   480U   /* 1 us after a PWM edge (CSA settle) */
+#define VCM_ADC_TRIG_EDGE_MARGIN   480U   /* 1 us: coast S&H away from PWM edges */
+#define VCM_ADC_ON_EDGE_MARGIN     48U    /* 100 ns: ON-pulse S&H off the switching edge */
 #define VCM_ADC_CONV_GUARD         720U   /* ~1.5 us: sample + conv before next trig */
 #define VCM_ADC_KERNEL_HZ          24000000UL  /* PLL2P 96 MHz / ASYNC_DIV4 */
 #define VCM_ADC_SMP_CYCLES         16.5f       /* CubeMX 16.5; S&H at end of this */
 #define VCM_ADC_SMP_DELAY          ((uint16_t)(VCM_ADC_SMP_CYCLES * \
                                  ((float)VCM_HRTIM_CLOCK_HZ / (float)VCM_ADC_KERNEL_HZ) + 0.5f)) /* 330 */
-#define VCM_ADC_N                  2U     /* 1 in +coast, 1 in -coast; duration-weighted → PI */
+#define VCM_ADC_MIN_COAST          ((uint16_t)(2U * VCM_ADC_TRIG_EDGE_MARGIN + \
+                                 VCM_ADC_SMP_DELAY)) /* ~2.7 us quiet window */
+#define VCM_ADC_N                  2U     /* + and − slots; duration-weighted → PI */
 
 /* ADCTRG1 = TA CMP2 | TB CMP3. DMA length 2.
- * Trigger is advanced by SMP_DELAY so hold instant is coast midpoint. */
+ * Prefer coast midpoint. If coast < MIN_COAST, sample inside the MOS ON pulse
+ * (series CSA is valid while conducting) with the whole S&H window inset from
+ * both PWM edges. Trigger is advanced by SMP_DELAY so S&H ends on the hold. */
 
 /* Gain-cal: UART force current (clamp meter) and rolling mean window */
 #define VCM_CAL_FORCE_A            0.50f
