@@ -23,6 +23,9 @@ typedef struct
   float iref_a;
   float iref_offset_a;
   float ifb_a;
+  float ifb_avg_a;     /* this PWM period mean of coast samples → PI */
+  float ifb_ip_a;      /* +coast sample */
+  float ifb_im_a;      /* -coast sample */
   float ifb_raw_a;
   float ifb_offset_a;
   float iref_cal_acc;
@@ -32,6 +35,7 @@ typedef struct
   float kp;
   float ki;
   float ff_mod_per_a;
+  float iref_lpf_a;    /* Live/F command LPF α; 0.262 ≈ analog 1.45 kHz */
   float ifb_cal_acc;
   float iref_override_a;
   float cal_iref_mean;      /* EMA for UART 'G' */
@@ -44,9 +48,11 @@ typedef struct
   uint16_t ifb_cal_count;
   VCM_State_t state;
   uint8_t adc_active_valid;
+  uint8_t adc_pair_ok;        /* 1 = this period DMA delivered both I+ and I- */
   uint8_t pwm_armed;
   uint8_t calib_valid;
   uint8_t iref_override_en;
+  uint8_t iref_hold_en;       /* 1 = UART 'Z': PI off, equal dither */
   uint8_t pwm_mode;           /* VCM_PWM_MODE_*; Live Expr / UART B|T */
   uint32_t isr_ticks;
   uint32_t start_count;
