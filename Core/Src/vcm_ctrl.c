@@ -8,7 +8,7 @@
 
 VCM_Handle_t g_vcm;
 
-static volatile uint16_t vcm_adc1_dma __attribute__((section(".dma_buffer"), aligned(32)));
+static volatile uint16_t vcm_adc1_dma[VCM_ADC_N] __attribute__((section(".dma_buffer"), aligned(32)));
 static volatile uint16_t vcm_adc2_dma __attribute__((section(".dma_buffer"), aligned(32)));
 
 static void VCM_HRTIM_ApplyDuty(float m);
@@ -31,7 +31,15 @@ static uint8_t vcm_chop_a = 0xFFU;
 static uint8_t vcm_chop_b = 0xFFU;
 static uint16_t vcm_idle_deb;
 static float vcm_iref_z1;
-static int8_t vcm_tri_sign; /* +1: A chops / B low; -1: B chops / A low; 0: unset */
+#if VCM_PI_STEADY_EN
+static float vcm_err_lpf;
+static float vcm_err_p;
+static float vcm_err_i;
+static uint16_t vcm_pi_ss_cnt;
+#endif
+static int8_t vcm_tri_sign; /* leftover; dither tri-level does not use sign swap */
+static uint16_t vcm_coast_wp = 1U;
+static uint16_t vcm_coast_wn = 1U;
 static uint32_t vcm_cal_done_ms;
 static uint32_t vcm_en_off_ms;
 static uint16_t vcm_en_off_samples;
@@ -59,11 +67,22 @@ static void VCM_LoopStateReset(void)
   vcm_idle_deb = 0U;
   vcm_iref_z1 = 0.0f;
   vcm_tri_sign = 0;
+  g_vcm.ifb_avg_a = 0.0f;
+  g_vcm.ifb_ip_a = 0.0f;
+  g_vcm.ifb_im_a = 0.0f;
+  g_vcm.pi_steady = 0U;
+#if VCM_PI_STEADY_EN
+  vcm_err_lpf = 0.0f;
+  vcm_err_p = 0.0f;
+  vcm_err_i = 0.0f;
+  vcm_pi_ss_cnt = 0U;
+#endif
 }
 
 /*
  * m = Kp*e + Ki*∫e + R·I_ff + L·di/dt_ff
  * Long-idle clamp for true standstill only (not AC zero-cross).
+ * Hold-zone PI (pi_steady) after IREF is quiet for 3 ms.
  */
 static float VCM_PiStep(float ref, float fdbk)
 {
@@ -72,8 +91,13 @@ static float VCM_PiStep(float ref, float fdbk)
   float m_unsat;
   float m;
   float di_dt;
+  float kp;
+  float ki;
+  float err_p;
+  float err_i;
   float ref_abs = VCM_Absf(ref);
 
+#if VCM_IDLE_CLAMP_EN
   if (g_vcm.pwm_armed != 0U)
   {
     if (ref_abs < VCM_IDLE_ENTER_A)
@@ -87,8 +111,15 @@ static float VCM_PiStep(float ref, float fdbk)
         g_vcm.pwm_armed = 0U;
         g_vcm.integral = 0.0f;
         g_vcm.mod_ff = 0.0f;
+        g_vcm.pi_steady = 0U;
         vcm_idle_deb = 0U;
         vcm_iref_z1 = ref;
+#if VCM_PI_STEADY_EN
+        vcm_err_lpf = 0.0f;
+        vcm_err_p = 0.0f;
+        vcm_err_i = 0.0f;
+        vcm_pi_ss_cnt = 0U;
+#endif
         return 0.0f;
       }
     }
@@ -110,24 +141,83 @@ static float VCM_PiStep(float ref, float fdbk)
     {
       g_vcm.integral = 0.0f;
       g_vcm.mod_ff = 0.0f;
+      g_vcm.pi_steady = 0U;
       vcm_iref_z1 = ref;
+#if VCM_PI_STEADY_EN
+      vcm_err_lpf = 0.0f;
+      vcm_err_p = 0.0f;
+      vcm_err_i = 0.0f;
+      vcm_pi_ss_cnt = 0U;
+#endif
       return 0.0f;
     }
   }
+#else
+  g_vcm.pwm_armed = 1U;
+  vcm_idle_deb = 0U;
+  (void)ref_abs;
+#endif
 
   err = ref - fdbk;
+
+#if VCM_PI_STEADY_EN
+  {
+    float dref = VCM_Absf(ref - vcm_iref_z1);
+    float eabs;
+
+    vcm_err_lpf += VCM_PI_SS_ERR_LPF_A * (err - vcm_err_lpf);
+    vcm_err_p += VCM_PI_SS_P_LPF_A * (err - vcm_err_p);
+    vcm_err_i += VCM_PI_SS_I_LPF_A * (err - vcm_err_i);
+    eabs = VCM_Absf(vcm_err_lpf);
+    if (dref > VCM_PI_SS_EXIT_DIREF_A)
+    {
+      g_vcm.pi_steady = 0U;
+      vcm_pi_ss_cnt = 0U;
+    }
+    else if ((dref <= VCM_PI_SS_DIREF_A) && (eabs <= VCM_PI_SS_ERR_A))
+    {
+      if (vcm_pi_ss_cnt < VCM_PI_SS_IN_TICKS)
+      {
+        vcm_pi_ss_cnt++;
+      }
+      if (vcm_pi_ss_cnt >= VCM_PI_SS_IN_TICKS)
+      {
+        g_vcm.pi_steady = 1U;
+      }
+    }
+    else
+    {
+      vcm_pi_ss_cnt = 0U;
+    }
+  }
+#endif
+
+  kp = g_vcm.kp;
+  ki = g_vcm.ki;
+  err_p = err;
+  err_i = err;
+#if VCM_PI_STEADY_EN
+  if (g_vcm.pi_steady != 0U)
+  {
+    kp *= VCM_PI_SS_KP_SCALE;
+    ki *= VCM_PI_SS_KI_SCALE;
+    err_p = vcm_err_p;
+    err_i = vcm_err_i;
+  }
+#endif
+
   di_dt = (ref - vcm_iref_z1) * (float)VCM_CTRL_FREQ_HZ;
   vcm_iref_z1 = ref;
 
   m_ff = (ref * g_vcm.ff_mod_per_a) + (di_dt * VCM_L_FF_MOD_PER_A);
   g_vcm.mod_ff = m_ff;
 
-  m_unsat = (g_vcm.kp * err) + g_vcm.integral + m_ff;
+  m_unsat = (kp * err_p) + g_vcm.integral + m_ff;
 
-  if (!(((m_unsat >= VCM_MOD_MAX) && (err > 0.0f)) ||
-        ((m_unsat <= -VCM_MOD_MAX) && (err < 0.0f))))
+  if (!(((m_unsat >= VCM_MOD_MAX) && (err_i > 0.0f)) ||
+        ((m_unsat <= -VCM_MOD_MAX) && (err_i < 0.0f))))
   {
-    g_vcm.integral += g_vcm.ki * err * VCM_PWM_TS_S;
+    g_vcm.integral += ki * err_i * VCM_PWM_TS_S;
   }
   if (g_vcm.integral > VCM_I_INTEGRAL_LIM)
   {
@@ -138,7 +228,7 @@ static float VCM_PiStep(float ref, float fdbk)
     g_vcm.integral = -VCM_I_INTEGRAL_LIM;
   }
 
-  m = (g_vcm.kp * err) + g_vcm.integral + m_ff;
+  m = (kp * err_p) + g_vcm.integral + m_ff;
   if (m > VCM_MOD_MAX)
   {
     m = VCM_MOD_MAX;
@@ -168,10 +258,11 @@ static void VCM_FaultPin_Set(bool fault_active)
 
 int VCM_AdcStart(void)
 {
-  vcm_adc1_dma = (uint16_t)VCM_ADC_MID;
+  vcm_adc1_dma[0] = (uint16_t)VCM_ADC_MID;
+  vcm_adc1_dma[1] = (uint16_t)VCM_ADC_MID;
   vcm_adc2_dma = (uint16_t)VCM_ADC_MID;
 
-  if (HAL_ADC_Start_DMA(&hadc1, (uint32_t *)&vcm_adc1_dma, 1U) != HAL_OK)
+  if (HAL_ADC_Start_DMA(&hadc1, (uint32_t *)vcm_adc1_dma, VCM_ADC_N) != HAL_OK)
   {
     return -1;
   }
@@ -234,6 +325,180 @@ static uint16_t VCM_AdcTrigQuiet(uint16_t edge_cnt)
   return trig;
 }
 
+/* Two ADCTRG1 edges: TA CMP2 then TB CMP3 (coast or ON-pulse body). */
+static void VCM_HRTIM_SetAdcTrigs2(uint16_t t_plus, uint16_t t_minus)
+{
+  /* Placement already insets from PWM edges. Do not re-clamp to 1 us from
+   * period ends — that would shove a short-pulse trigger onto a switching edge. */
+  const uint16_t lo = 2U;
+  const uint16_t hi = (uint16_t)(VCM_PWM_PERIOD - 3U);
+
+  if (t_plus < lo)
+  {
+    t_plus = lo;
+  }
+  if (t_plus > hi)
+  {
+    t_plus = hi;
+  }
+  if (t_minus < lo)
+  {
+    t_minus = lo;
+  }
+  if (t_minus > hi)
+  {
+    t_minus = hi;
+  }
+
+  __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_COMPAREUNIT_2, t_plus);
+  __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_B, HRTIM_COMPAREUNIT_3, t_minus);
+}
+
+static void VCM_AdcSpan2(uint16_t t_lo, uint16_t t_hi)
+{
+  uint16_t span;
+  uint16_t t0;
+  uint16_t t1;
+
+  if (t_hi <= t_lo)
+  {
+    t_hi = (uint16_t)(t_lo + VCM_ADC_CONV_GUARD);
+  }
+  span = (uint16_t)(t_hi - t_lo);
+  t0 = (uint16_t)(t_lo + (span / 3U));
+  t1 = (uint16_t)(t_lo + ((2U * span) / 3U));
+  VCM_HRTIM_SetAdcTrigs2(t0, t1);
+}
+
+static uint8_t VCM_CoastFits(uint16_t after_edge, uint16_t before_edge)
+{
+  if (before_edge <= after_edge)
+  {
+    return 0U;
+  }
+  return ((uint16_t)(before_edge - after_edge) >= VCM_ADC_MIN_COAST) ? 1U : 0U;
+}
+
+/* Entire S&H window inside MOS ON [start, start+len), inset from both edges.
+ * Returns 0xFFFF if the pulse is too short. */
+static uint16_t VCM_OnPulseTrig(uint16_t start, uint16_t len)
+{
+  const uint16_t mar = VCM_ADC_ON_EDGE_MARGIN;
+  const uint16_t smp = VCM_ADC_SMP_DELAY;
+  uint16_t trig_lo;
+  uint16_t trig_hi;
+  uint16_t hold;
+  uint16_t trig;
+
+  if (len <= (uint16_t)((2U * mar) + smp))
+  {
+    return 0xFFFFU;
+  }
+
+  trig_lo = (uint16_t)(start + mar);
+  trig_hi = (uint16_t)(start + len - mar - smp);
+
+  hold = (uint16_t)(start + (len / 2U));
+  if (hold > smp)
+  {
+    trig = (uint16_t)(hold - smp);
+  }
+  else
+  {
+    trig = 0U;
+  }
+  if (trig < trig_lo)
+  {
+    trig = trig_lo;
+  }
+  if (trig > trig_hi)
+  {
+    trig = trig_hi;
+  }
+  return trig;
+}
+
+static void VCM_OnPulsePair(uint16_t start, uint16_t len, uint16_t *t0, uint16_t *t1)
+{
+  const uint16_t mar = VCM_ADC_ON_EDGE_MARGIN;
+  const uint16_t smp = VCM_ADC_SMP_DELAY;
+  const uint16_t sep = VCM_ADC_CONV_GUARD;
+  uint16_t lo;
+  uint16_t hi;
+  uint16_t span;
+
+  lo = (uint16_t)(start + mar);
+  if (len > (uint16_t)(mar + smp))
+  {
+    hi = (uint16_t)(start + len - mar - smp);
+  }
+  else
+  {
+    hi = lo;
+  }
+  if (hi <= lo)
+  {
+    *t0 = lo;
+    *t1 = (uint16_t)(lo + sep);
+    return;
+  }
+  span = (uint16_t)(hi - lo);
+  *t0 = (uint16_t)(lo + (span / 3U));
+  *t1 = (uint16_t)(lo + ((2U * span) / 3U));
+  if (*t1 < (uint16_t)(*t0 + sep))
+  {
+    uint16_t pushed = (uint16_t)(*t0 + sep);
+    if (pushed <= hi)
+    {
+      *t1 = pushed;
+    }
+  }
+}
+
+/* Hold instant = quiet-coast midpoint. Trigger earlier by SMP_DELAY so
+ * STM32 S&H (end of 16.5-cycle sample) lands on that instant. */
+static uint16_t VCM_CoastMid(uint16_t after_edge, uint16_t before_edge)
+{
+  uint16_t hold_lo;
+  uint16_t hold_hi;
+  uint16_t hold;
+  uint16_t trig;
+  const uint16_t smp = VCM_ADC_SMP_DELAY;
+  const uint16_t start_min = (uint16_t)(after_edge + (VCM_ADC_TRIG_EDGE_MARGIN / 4U));
+
+  hold_lo = (uint16_t)(after_edge + VCM_ADC_TRIG_EDGE_MARGIN);
+  if (before_edge > VCM_ADC_TRIG_EDGE_MARGIN)
+  {
+    hold_hi = (uint16_t)(before_edge - VCM_ADC_TRIG_EDGE_MARGIN);
+  }
+  else
+  {
+    hold_hi = hold_lo;
+  }
+  if (hold_hi <= hold_lo)
+  {
+    hold = hold_lo;
+  }
+  else
+  {
+    hold = (uint16_t)(hold_lo + ((hold_hi - hold_lo) / 2U));
+  }
+
+  if (hold > smp)
+  {
+    trig = (uint16_t)(hold - smp);
+  }
+  else
+  {
+    trig = 0U;
+  }
+  if (trig < start_min)
+  {
+    trig = start_min;
+  }
+  return trig;
+}
+
 static void VCM_HRTIM_SetChop(uint32_t timer_idx, uint8_t chop)
 {
   uint8_t *prev;
@@ -260,10 +525,50 @@ static void VCM_HRTIM_SetChop(uint32_t timer_idx, uint8_t chop)
   }
 }
 
+static void VCM_HRTIM_InvalidateChop(void)
+{
+  vcm_chop_a = 0xFFU;
+  vcm_chop_b = 0xFFU;
+}
+
+/* HS pulse at start of period: high [0, high_cnt). */
+static void VCM_HRTIM_PulseStart(uint32_t timer_idx, uint16_t high_cnt)
+{
+  HRTIM_Timerx_TypeDef *tim = &hhrtim.Instance->sTimerxRegs[timer_idx];
+  tim->SETx1R = HRTIM_SET1R_PER;
+  tim->RSTx1R = HRTIM_RST1R_CMP1;
+  __HAL_HRTIM_SETCOMPARE(&hhrtim, timer_idx, HRTIM_COMPAREUNIT_1, high_cnt);
+}
+
+/* HS pulse at [start, start+high_cnt). Reset on CMP2, never on PER. */
+static void VCM_HRTIM_PulseWindow(uint32_t timer_idx, uint16_t start, uint16_t high_cnt)
+{
+  uint16_t end;
+  HRTIM_Timerx_TypeDef *tim = &hhrtim.Instance->sTimerxRegs[timer_idx];
+  const uint16_t period = VCM_PWM_PERIOD;
+
+  if (start < 1U)
+  {
+    start = 1U;
+  }
+  if (high_cnt < 1U)
+  {
+    high_cnt = 1U;
+  }
+  if (((uint32_t)start + (uint32_t)high_cnt) >= (uint32_t)(period - 1U))
+  {
+    high_cnt = (uint16_t)(period - start - 1U);
+  }
+  end = (uint16_t)(start + high_cnt);
+  tim->SETx1R = HRTIM_SET1R_CMP1;
+  tim->RSTx1R = HRTIM_RST1R_CMP2;
+  __HAL_HRTIM_SETCOMPARE(&hhrtim, timer_idx, HRTIM_COMPAREUNIT_1, start);
+  __HAL_HRTIM_SETCOMPARE(&hhrtim, timer_idx, HRTIM_COMPAREUNIT_2, end);
+}
+
 /*
- * Bipolar: da=0.5+m, db=0.5-m, Vcoil ≈ 2*m*Vbus.
- * Three-level: active leg duty D=2*|m|, idle leg CMP=duty_min with chop ON
- * so complementary low-side stays ON (sync freewheel). Never SetChop(0) while armed.
+ * Bipolar: da=0.5+m, db=0.5-m (UART 'B').
+ * Three-level: +V dither/pulse → coast → −V dither/pulse → coast (Z驱动).
  */
 static void VCM_HRTIM_ApplyDuty(float m)
 {
@@ -271,13 +576,19 @@ static void VCM_HRTIM_ApplyDuty(float m)
   uint16_t cmp_b;
   uint16_t adc_trig;
   uint16_t edge;
-  uint16_t pwm_cnt;
+  uint16_t cnt_a;
+  uint16_t cnt_b;
+  uint16_t room;
+  uint16_t remain;
+  uint16_t start_b;
+  uint16_t end_b;
   float da;
   float db;
-  float mag;
-  uint8_t use_tri;
+  float da_f;
+  float db_f;
   const uint16_t duty_min = 60U;
   const uint16_t duty_max = (uint16_t)(VCM_PWM_PERIOD - duty_min);
+  const uint16_t dither_cnt = (uint16_t)(VCM_TRI_DITHER_D * (float)VCM_PWM_PERIOD + 0.5f);
 
   if (m > VCM_MOD_MAX)
   {
@@ -298,77 +609,118 @@ static void VCM_HRTIM_ApplyDuty(float m)
     adc_trig = VCM_AdcTrigQuiet(duty_min);
     g_vcm.adc_active_valid = 1U;
     __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_COMPAREUNIT_1, cmp_a);
-    __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_COMPAREUNIT_2, adc_trig);
+    VCM_AdcSpan2(adc_trig, (uint16_t)(VCM_PWM_PERIOD - VCM_ADC_CONV_GUARD));
     __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_B, HRTIM_COMPAREUNIT_1, cmp_b);
     return;
   }
 
-  mag = (m >= 0.0f) ? m : -m;
-  use_tri = 0U;
   if (g_vcm.pwm_mode == VCM_PWM_MODE_TRILEVEL)
   {
-    if (vcm_tri_sign > 0)
+    if (m >= 0.0f)
     {
-      if (m < -VCM_TRI_SIGN_OFF_M)
-      {
-        vcm_tri_sign = -1;
-      }
-    }
-    else if (vcm_tri_sign < 0)
-    {
-      if (m > VCM_TRI_SIGN_OFF_M)
-      {
-        vcm_tri_sign = 1;
-      }
-    }
-    else if (mag >= VCM_TRI_SIGN_ON_M)
-    {
-      vcm_tri_sign = (m >= 0.0f) ? 1 : -1;
-    }
-
-    if ((vcm_tri_sign != 0) && (mag >= VCM_TRI_BIPOLAR_M))
-    {
-      use_tri = 1U;
-    }
-  }
-  else
-  {
-    vcm_tri_sign = 0;
-  }
-
-  if (use_tri != 0U)
-  {
-    /* D = 2*|m| keeps same average Vcoil scale as bipolar. */
-    pwm_cnt = (uint16_t)((2.0f * mag * (float)VCM_PWM_PERIOD) + 0.5f);
-    if (pwm_cnt < duty_min)
-    {
-      pwm_cnt = duty_min;
-    }
-    if (pwm_cnt > duty_max)
-    {
-      pwm_cnt = duty_max;
-    }
-
-    /* Both legs stay in chop mode: idle CMP=duty_min => HS off, LS ON. */
-    VCM_HRTIM_SetChop(HRTIM_TIMERINDEX_TIMER_A, 1U);
-    VCM_HRTIM_SetChop(HRTIM_TIMERINDEX_TIMER_B, 1U);
-
-    if (vcm_tri_sign > 0)
-    {
-      cmp_a = pwm_cnt;
-      cmp_b = duty_min;
+      da_f = VCM_TRI_DITHER_D + (2.0f * m);
+      db_f = VCM_TRI_DITHER_D;
     }
     else
     {
-      cmp_a = duty_min;
-      cmp_b = pwm_cnt;
+      da_f = VCM_TRI_DITHER_D;
+      db_f = VCM_TRI_DITHER_D - (2.0f * m);
+    }
+    cnt_a = (uint16_t)(da_f * (float)VCM_PWM_PERIOD + 0.5f);
+    cnt_b = (uint16_t)(db_f * (float)VCM_PWM_PERIOD + 0.5f);
+    if (cnt_a < dither_cnt)
+    {
+      cnt_a = dither_cnt;
+    }
+    if (cnt_b < dither_cnt)
+    {
+      cnt_b = dither_cnt;
+    }
+    if (cnt_a > duty_max)
+    {
+      cnt_a = duty_max;
+    }
+    if (cnt_b > duty_max)
+    {
+      cnt_b = duty_max;
+    }
+    if ((cnt_a + cnt_b) > (uint16_t)(VCM_PWM_PERIOD - (2U * duty_min)))
+    {
+      room = (uint16_t)(VCM_PWM_PERIOD - (2U * duty_min));
+      if (cnt_a >= cnt_b)
+      {
+        cnt_b = dither_cnt;
+        cnt_a = (uint16_t)(room - cnt_b);
+      }
+      else
+      {
+        cnt_a = dither_cnt;
+        cnt_b = (uint16_t)(room - cnt_a);
+      }
     }
 
-    adc_trig = VCM_AdcTrigQuiet(pwm_cnt);
-    g_vcm.adc_active_valid = 1U;
-    __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_COMPAREUNIT_1, cmp_a);
-    __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_COMPAREUNIT_2, adc_trig);
-    __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_B, HRTIM_COMPAREUNIT_1, cmp_b);
+    remain = (uint16_t)(VCM_PWM_PERIOD - cnt_a - cnt_b);
+    start_b = (uint16_t)(cnt_a + (remain / 2U));
+    if (start_b <= cnt_a)
+    {
+      start_b = (uint16_t)(cnt_a + duty_min);
+    }
+    end_b = (uint16_t)(start_b + cnt_b);
+
+    VCM_HRTIM_InvalidateChop();
+    VCM_HRTIM_PulseStart(HRTIM_TIMERINDEX_TIMER_A, cnt_a);
+    VCM_HRTIM_PulseWindow(HRTIM_TIMERINDEX_TIMER_B, start_b, cnt_b);
+
+    /* Prefer mid-coast. If a coast is too short, sample inside that polarity's
+     * MOS ON pulse (series CSA is valid while conducting), never on an edge. */
+    {
+      uint16_t tp;
+      uint16_t tn;
+
+      if (VCM_CoastFits(cnt_a, start_b) != 0U)
+      {
+        tp = VCM_CoastMid(cnt_a, start_b);
+        vcm_coast_wp = (start_b > cnt_a) ? (uint16_t)(start_b - cnt_a) : 1U;
+      }
+      else
+      {
+        tp = VCM_OnPulseTrig(0U, cnt_a);
+        vcm_coast_wp = (cnt_a > 0U) ? cnt_a : 1U;
+      }
+
+      if (VCM_CoastFits(end_b, VCM_PWM_PERIOD) != 0U)
+      {
+        tn = VCM_CoastMid(end_b, VCM_PWM_PERIOD);
+        vcm_coast_wn = (VCM_PWM_PERIOD > end_b)
+                           ? (uint16_t)(VCM_PWM_PERIOD - end_b) : 1U;
+      }
+      else
+      {
+        tn = VCM_OnPulseTrig(start_b, cnt_b);
+        vcm_coast_wn = (cnt_b > 0U) ? cnt_b : 1U;
+      }
+
+      if ((tp == 0xFFFFU) || (tn == 0xFFFFU))
+      {
+        if (cnt_a >= cnt_b)
+        {
+          VCM_OnPulsePair(0U, cnt_a, &tp, &tn);
+          vcm_coast_wp = (cnt_a > 1U) ? (uint16_t)(cnt_a / 2U) : 1U;
+          vcm_coast_wn = (cnt_a > vcm_coast_wp)
+                             ? (uint16_t)(cnt_a - vcm_coast_wp) : 1U;
+        }
+        else
+        {
+          VCM_OnPulsePair(start_b, cnt_b, &tp, &tn);
+          vcm_coast_wp = (cnt_b > 1U) ? (uint16_t)(cnt_b / 2U) : 1U;
+          vcm_coast_wn = (cnt_b > vcm_coast_wp)
+                             ? (uint16_t)(cnt_b - vcm_coast_wp) : 1U;
+        }
+      }
+
+      g_vcm.adc_active_valid = 1U;
+      VCM_HRTIM_SetAdcTrigs2(tp, tn);
+    }
     return;
   }
 
@@ -401,7 +753,7 @@ static void VCM_HRTIM_ApplyDuty(float m)
 
   g_vcm.adc_active_valid = 1U;
   __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_COMPAREUNIT_1, cmp_a);
-  __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_COMPAREUNIT_2, adc_trig);
+  VCM_AdcSpan2(adc_trig, (uint16_t)(VCM_PWM_PERIOD - VCM_ADC_CONV_GUARD));
   __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_B, HRTIM_COMPAREUNIT_1, cmp_b);
 }
 
@@ -523,6 +875,7 @@ void VCM_Start(void)
   vcm_chop_b = 0xFFU;
   VCM_HRTIM_ApplyDuty(0.0f);
 
+#if VCM_ENABLE_CAL_EN
   /*
    * Fast re-enable: the offsets drift slowly with temperature, so a brief enable
    * drop does not justify another 2.56 ms of clamped PWM. Reuse them and go
@@ -537,6 +890,10 @@ void VCM_Start(void)
   }
 
   g_vcm.state = VCM_STATE_CALIB;
+#else
+  /* Offsets stay 0 (Init). Close PI immediately so analog IREF is not open-loop. */
+  g_vcm.state = VCM_STATE_RUN;
+#endif
 }
 
 #if VCM_DIAG_EN
@@ -612,6 +969,11 @@ void VCM_CurrentLoop_IRQHandler(void)
 {
   float m;
   float iref;
+  float i_samp[VCM_ADC_N];
+  float sum_raw;
+  uint32_t raw_sum;
+  uint32_t n;
+  uint16_t raw;
 
   if (__HAL_ADC_GET_FLAG(&hadc1, ADC_FLAG_OVR) != 0U)
   {
@@ -625,11 +987,41 @@ void VCM_CurrentLoop_IRQHandler(void)
   }
 
   __DSB();
-  g_vcm.adc_ifb  = vcm_adc1_dma;
   g_vcm.adc_iref = vcm_adc2_dma;
+  g_vcm.adc_pair_ok = (hadc1.DMA_Handle != NULL)
+                      && (__HAL_DMA_GET_COUNTER(hadc1.DMA_Handle) == VCM_ADC_N);
 
-  g_vcm.ifb_raw_a = VCM_AdcToIfbAmpere(g_vcm.adc_ifb);
-  g_vcm.ifb_a = g_vcm.ifb_raw_a - g_vcm.ifb_offset_a;
+  raw_sum = 0U;
+  sum_raw = 0.0f;
+  for (n = 0U; n < VCM_ADC_N; n++)
+  {
+    raw = vcm_adc1_dma[n];
+    raw_sum += raw;
+    i_samp[n] = VCM_AdcToIfbAmpere(raw);
+    sum_raw += i_samp[n];
+    i_samp[n] -= g_vcm.ifb_offset_a;
+  }
+  g_vcm.adc_ifb = (uint16_t)(raw_sum / VCM_ADC_N);
+
+  if (g_vcm.adc_pair_ok != 0U)
+  {
+    g_vcm.ifb_raw_a = sum_raw / (float)VCM_ADC_N;
+    g_vcm.ifb_ip_a = i_samp[0];
+    g_vcm.ifb_im_a = i_samp[1];
+    {
+      uint32_t wsum = (uint32_t)vcm_coast_wp + (uint32_t)vcm_coast_wn;
+      if (wsum == 0U)
+      {
+        g_vcm.ifb_a = 0.5f * (i_samp[0] + i_samp[1]);
+      }
+      else
+      {
+        g_vcm.ifb_a = (((float)vcm_coast_wp * i_samp[0]) +
+                       ((float)vcm_coast_wn * i_samp[1])) / (float)wsum;
+      }
+    }
+    g_vcm.ifb_avg_a = g_vcm.ifb_a;
+  }
 
   if (g_vcm.iref_override_en != 0U)
   {
@@ -651,7 +1043,7 @@ void VCM_CurrentLoop_IRQHandler(void)
 
   /* Rolling means for UART gain report (no effect on loop). */
   g_vcm.cal_iref_mean += VCM_CAL_AVG_ALPHA * (g_vcm.iref_a - g_vcm.cal_iref_mean);
-  g_vcm.cal_ifb_mean += VCM_CAL_AVG_ALPHA * (g_vcm.ifb_a - g_vcm.cal_ifb_mean);
+  g_vcm.cal_ifb_mean += VCM_CAL_AVG_ALPHA * (g_vcm.ifb_avg_a - g_vcm.cal_ifb_mean);
 
   if (!VCM_IsDrvEnActive())
   {
@@ -684,23 +1076,35 @@ void VCM_CurrentLoop_IRQHandler(void)
     return;
   }
 
-  if ((g_vcm.ifb_a > VCM_I_OCP_A) || (g_vcm.ifb_a < -VCM_I_OCP_A))
   {
-    if (vcm_ocp_hits < 0xFFFFU)
+    uint8_t ocp = 0U;
+    for (n = 0U; n < VCM_ADC_N; n++)
     {
-      vcm_ocp_hits++;
+      if ((i_samp[n] > VCM_I_OCP_A) || (i_samp[n] < -VCM_I_OCP_A))
+      {
+        ocp = 1U;
+        break;
+      }
     }
-    if (vcm_ocp_hits >= VCM_OCP_CONFIRM_SAMPLES)
+    if (ocp != 0U)
     {
-      VCM_EnterFault(2U);
-      return;
+      if (vcm_ocp_hits < 0xFFFFU)
+      {
+        vcm_ocp_hits++;
+      }
+      if (vcm_ocp_hits >= VCM_OCP_CONFIRM_SAMPLES)
+      {
+        VCM_EnterFault(2U);
+        return;
+      }
     }
-  }
-  else
-  {
-    vcm_ocp_hits = 0U;
+    else
+    {
+      vcm_ocp_hits = 0U;
+    }
   }
 
+#if VCM_ENABLE_CAL_EN
   if (g_vcm.state == VCM_STATE_CALIB)
   {
     g_vcm.ifb_cal_acc += g_vcm.ifb_raw_a;
@@ -733,12 +1137,13 @@ void VCM_CurrentLoop_IRQHandler(void)
     }
     return;
   }
+#endif
 
 #if VCM_DIAG_EN
   VCM_DiagService();
 #endif
 
-  m = VCM_PiStep(g_vcm.iref_a, g_vcm.ifb_a);
+  m = VCM_PiStep(g_vcm.iref_a, g_vcm.ifb_avg_a);
   g_vcm.mod = m;
   VCM_HRTIM_ApplyDuty(m);
 }
@@ -747,6 +1152,9 @@ void VCM_Init(void)
 {
   g_vcm.iref_a = 0.0f;
   g_vcm.ifb_a = 0.0f;
+  g_vcm.ifb_avg_a = 0.0f;
+  g_vcm.ifb_ip_a = 0.0f;
+  g_vcm.ifb_im_a = 0.0f;
   g_vcm.ifb_raw_a = 0.0f;
   g_vcm.ifb_offset_a = 0.0f;
   g_vcm.iref_offset_a = 0.0f;
@@ -768,6 +1176,7 @@ void VCM_Init(void)
   g_vcm.adc1_ovr_cnt = 0U;
   g_vcm.adc2_ovr_cnt = 0U;
   g_vcm.adc_active_valid = 0U;
+  g_vcm.adc_pair_ok = 0U;
   g_vcm.ifb_cal_count = 0U;
   g_vcm.ifb_cal_acc = 0.0f;
   g_vcm.calib_valid = 0U;
@@ -869,10 +1278,18 @@ uint8_t VCM_ServiceUartCmd(uint8_t cmd)
     VCM_UartWriteMilli(g_vcm.cal_iref_mean);
     VCM_UartWrite(" ifb_mA=");
     VCM_UartWriteMilli(g_vcm.cal_ifb_mean);
+    VCM_UartWrite(" ifb_avg_mA=");
+    VCM_UartWriteMilli(g_vcm.ifb_avg_a);
+    VCM_UartWrite(" ip_mA=");
+    VCM_UartWriteMilli(g_vcm.ifb_ip_a);
+    VCM_UartWrite(" im_mA=");
+    VCM_UartWriteMilli(g_vcm.ifb_im_a);
     VCM_UartWrite(" adc_iref=");
     VCM_UartWriteI32((int32_t)g_vcm.adc_iref);
     VCM_UartWrite(" adc_ifb=");
     VCM_UartWriteI32((int32_t)g_vcm.adc_ifb);
+    VCM_UartWrite(" pair=");
+    VCM_UartWriteI32((int32_t)g_vcm.adc_pair_ok);
     VCM_UartWrite(" ov=");
     VCM_UartWriteI32((int32_t)g_vcm.iref_override_en);
     VCM_UartWrite(" armed=");
@@ -974,13 +1391,21 @@ static void VCM_ConfigHalfBridge(uint32_t timer_idx, uint32_t output1, uint32_t 
     Error_Handler();
   }
 
-  if (timer_idx == HRTIM_TIMERINDEX_TIMER_A)
+  /* ADC: A CMP2 = +coast, B CMP3 = -coast. Timer B CMP2 = -pulse falling edge. */
+  pCompareCfg.CompareValue = (timer_idx == HRTIM_TIMERINDEX_TIMER_A)
+                             ? (VCM_PWM_PERIOD / 4U)
+                             : ((3U * VCM_PWM_PERIOD) / 4U);
+  if (HAL_HRTIM_WaveformCompareConfig(&hhrtim, timer_idx, HRTIM_COMPAREUNIT_2, &pCompareCfg) != HAL_OK)
   {
-    pCompareCfg.CompareValue = VCM_PWM_PERIOD / 4U;
-    if (HAL_HRTIM_WaveformCompareConfig(&hhrtim, timer_idx, HRTIM_COMPAREUNIT_2, &pCompareCfg) != HAL_OK)
-    {
-      Error_Handler();
-    }
+    Error_Handler();
+  }
+
+  pCompareCfg.CompareValue = (timer_idx == HRTIM_TIMERINDEX_TIMER_A)
+                             ? (VCM_PWM_PERIOD / 3U)
+                             : ((2U * VCM_PWM_PERIOD) / 3U);
+  if (HAL_HRTIM_WaveformCompareConfig(&hhrtim, timer_idx, HRTIM_COMPAREUNIT_3, &pCompareCfg) != HAL_OK)
+  {
+    Error_Handler();
   }
 
   pDeadTimeCfg.Prescaler = VCM_DT_PRESCALER;
@@ -1065,7 +1490,8 @@ void VCM_HRTIM_InitTimers(void)
   VCM_ConfigHalfBridge(HRTIM_TIMERINDEX_TIMER_B, HRTIM_OUTPUT_TB1, HRTIM_OUTPUT_TB2);
 
   adc_trig.UpdateSource = HRTIM_ADCTRIGGERUPDATE_TIMER_A;
-  adc_trig.Trigger = HRTIM_ADCTRIGGEREVENT13_TIMERA_CMP2;
+  adc_trig.Trigger = HRTIM_ADCTRIGGEREVENT13_TIMERA_CMP2 |
+                     HRTIM_ADCTRIGGEREVENT13_TIMERB_CMP3;
   if (HAL_HRTIM_ADCTriggerConfig(&hhrtim, HRTIM_ADCTRIGGER_1, &adc_trig) != HAL_OK)
   {
     Error_Handler();

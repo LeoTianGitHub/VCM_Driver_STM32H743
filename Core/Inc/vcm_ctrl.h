@@ -23,6 +23,9 @@ typedef struct
   float iref_a;
   float iref_offset_a;
   float ifb_a;
+  float ifb_avg_a;     /* period mean of I+/I- → PI */
+  float ifb_ip_a;
+  float ifb_im_a;
   float ifb_raw_a;
   float ifb_offset_a;
   float iref_cal_acc;
@@ -44,9 +47,11 @@ typedef struct
   uint16_t ifb_cal_count;
   VCM_State_t state;
   uint8_t adc_active_valid;
+  uint8_t adc_pair_ok;
   uint8_t pwm_armed;
   uint8_t calib_valid;
   uint8_t iref_override_en;
+  uint8_t pi_steady;          /* 1 = hold: reduced PI, P@400Hz I@50Hz */
   uint8_t pwm_mode;           /* VCM_PWM_MODE_*; Live Expr / UART B|T */
   uint32_t isr_ticks;
   uint32_t start_count;
