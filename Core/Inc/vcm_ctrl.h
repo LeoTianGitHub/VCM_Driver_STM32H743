@@ -53,6 +53,7 @@ typedef struct
   uint8_t calib_valid;
   uint8_t iref_override_en;
   uint8_t iref_hold_en;       /* 1 = UART 'Z': PI off, equal dither */
+  uint8_t pi_steady;          /* 1 = hold: reduced PI, P@400Hz I@40Hz */
   uint8_t pwm_mode;           /* VCM_PWM_MODE_*; Live Expr / UART B|T */
   uint32_t isr_ticks;
   uint32_t start_count;

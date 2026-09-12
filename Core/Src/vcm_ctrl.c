@@ -34,6 +34,11 @@ static float vcm_iref_z1;
 static int8_t vcm_tri_sign; /* +1: A chops / B low; -1: B chops / A low; 0: unset */
 static uint16_t vcm_coast_wp = 1U;
 static uint16_t vcm_coast_wn = 1U;
+#if VCM_PI_STEADY_EN
+static float vcm_err_lpf;
+static float vcm_err_p;
+static float vcm_err_i;
+#endif
 static uint32_t vcm_cal_done_ms;
 static uint32_t vcm_en_off_ms;
 static uint16_t vcm_en_off_samples;
@@ -64,6 +69,12 @@ static void VCM_LoopStateReset(void)
   g_vcm.ifb_avg_a = 0.0f;
   g_vcm.ifb_ip_a = 0.0f;
   g_vcm.ifb_im_a = 0.0f;
+  g_vcm.pi_steady = 0U;
+#if VCM_PI_STEADY_EN
+  vcm_err_lpf = 0.0f;
+  vcm_err_p = 0.0f;
+  vcm_err_i = 0.0f;
+#endif
 }
 
 /*
@@ -77,6 +88,10 @@ static float VCM_PiStep(float ref, float fdbk)
   float m_unsat;
   float m;
   float di_dt;
+  float kp;
+  float ki;
+  float err_p;
+  float err_i;
   float ref_abs = VCM_Absf(ref);
 
 #if VCM_IDLE_CLAMP_EN
@@ -93,8 +108,14 @@ static float VCM_PiStep(float ref, float fdbk)
         g_vcm.pwm_armed = 0U;
         g_vcm.integral = 0.0f;
         g_vcm.mod_ff = 0.0f;
+        g_vcm.pi_steady = 0U;
         vcm_idle_deb = 0U;
         vcm_iref_z1 = ref;
+#if VCM_PI_STEADY_EN
+        vcm_err_lpf = 0.0f;
+        vcm_err_p = 0.0f;
+        vcm_err_i = 0.0f;
+#endif
         return 0.0f;
       }
     }
@@ -116,7 +137,13 @@ static float VCM_PiStep(float ref, float fdbk)
     {
       g_vcm.integral = 0.0f;
       g_vcm.mod_ff = 0.0f;
+      g_vcm.pi_steady = 0U;
       vcm_iref_z1 = ref;
+#if VCM_PI_STEADY_EN
+      vcm_err_lpf = 0.0f;
+      vcm_err_p = 0.0f;
+      vcm_err_i = 0.0f;
+#endif
       return 0.0f;
     }
   }
@@ -134,12 +161,52 @@ static float VCM_PiStep(float ref, float fdbk)
   {
     g_vcm.integral = 0.0f;
     g_vcm.mod_ff = 0.0f;
+    g_vcm.pi_steady = 0U;
     vcm_iref_z1 = ref;
+#if VCM_PI_STEADY_EN
+    vcm_err_lpf = 0.0f;
+    vcm_err_p = 0.0f;
+    vcm_err_i = 0.0f;
+#endif
     return 0.0f;
   }
 #endif
 
   err = ref - fdbk;
+
+#if VCM_PI_STEADY_EN
+  {
+    float dref = VCM_Absf(ref - vcm_iref_z1);
+    float eabs;
+
+    vcm_err_lpf += VCM_PI_SS_ERR_LPF_A * (err - vcm_err_lpf);
+    vcm_err_p += VCM_PI_SS_P_LPF_A * (err - vcm_err_p);
+    vcm_err_i += VCM_PI_SS_I_LPF_A * (err - vcm_err_i);
+    eabs = VCM_Absf(vcm_err_lpf);
+    if (dref > VCM_PI_SS_EXIT_DIREF_A)
+    {
+      g_vcm.pi_steady = 0U;
+    }
+    else if ((dref <= VCM_PI_SS_DIREF_A) && (eabs <= VCM_PI_SS_ERR_A))
+    {
+      g_vcm.pi_steady = 1U;
+    }
+  }
+#endif
+
+  kp = g_vcm.kp;
+  ki = g_vcm.ki;
+  err_p = err;
+  err_i = err;
+#if VCM_PI_STEADY_EN
+  if (g_vcm.pi_steady != 0U)
+  {
+    kp *= VCM_PI_SS_KP_SCALE;
+    ki *= VCM_PI_SS_KI_SCALE;
+    err_p = vcm_err_p;
+    err_i = vcm_err_i;
+  }
+#endif
 
   di_dt = (ref - vcm_iref_z1) * (float)VCM_CTRL_FREQ_HZ;
   vcm_iref_z1 = ref;
@@ -155,12 +222,12 @@ static float VCM_PiStep(float ref, float fdbk)
   m_ff = (ref * g_vcm.ff_mod_per_a) + (di_dt * VCM_L_FF_MOD_PER_A);
   g_vcm.mod_ff = m_ff;
 
-  m_unsat = (g_vcm.kp * err) + g_vcm.integral + m_ff;
+  m_unsat = (kp * err_p) + g_vcm.integral + m_ff;
 
-  if (!(((m_unsat >= VCM_MOD_MAX) && (err > 0.0f)) ||
-        ((m_unsat <= -VCM_MOD_MAX) && (err < 0.0f))))
+  if (!(((m_unsat >= VCM_MOD_MAX) && (err_i > 0.0f)) ||
+        ((m_unsat <= -VCM_MOD_MAX) && (err_i < 0.0f))))
   {
-    g_vcm.integral += g_vcm.ki * err * VCM_PWM_TS_S;
+    g_vcm.integral += ki * err_i * VCM_PWM_TS_S;
   }
   if (g_vcm.integral > VCM_I_INTEGRAL_LIM)
   {
@@ -171,7 +238,7 @@ static float VCM_PiStep(float ref, float fdbk)
     g_vcm.integral = -VCM_I_INTEGRAL_LIM;
   }
 
-  m = (g_vcm.kp * err) + g_vcm.integral + m_ff;
+  m = (kp * err_p) + g_vcm.integral + m_ff;
   if (m > VCM_MOD_MAX)
   {
     m = VCM_MOD_MAX;

@@ -33,7 +33,7 @@
 /*
  * Dual-pulse three-level, one period: +V pulse → coast → -V pulse → coast.
  * Both pulses always stay >= dither; m only lengthens one side.
- * Net Vcoil=(Da-Db)*Vbus=2*m*Vbus. Dither = 1 us.
+ * Net Vcoil=(Da-Db)*Vbus=2*m*Vbus. Dither = 1 us (needed for small-I linearity).
  */
 #define VCM_TRI_PULSE_NS           1000U
 #define VCM_TRI_DITHER_D           ((float)VCM_TRI_PULSE_NS * 1.0e-9f * \
@@ -69,6 +69,19 @@
 #define VCM_KP                  0.23f
 #define VCM_KI                  460.0f
 #define VCM_I_INTEGRAL_LIM      0.30f
+
+/* Two-zone PI. Track: raw err, full Kp/Ki.
+ * Hold: reduced Kp/Ki. P on ~400 Hz (kill period residual, keep position).
+ * I on ~40 Hz (don't integrate residual). Dither on. Exit only on IREF step. */
+#define VCM_PI_STEADY_EN          1U
+#define VCM_PI_SS_KP_SCALE        0.40f
+#define VCM_PI_SS_KI_SCALE        0.15f
+#define VCM_PI_SS_DIREF_A         0.020f
+#define VCM_PI_SS_EXIT_DIREF_A    0.050f
+#define VCM_PI_SS_ERR_A           0.040f
+#define VCM_PI_SS_ERR_LPF_A       0.020f   /* enter detect ~160 Hz */
+#define VCM_PI_SS_P_LPF_A         0.049f   /* hold P ~400 Hz */
+#define VCM_PI_SS_I_LPF_A         0.0050f  /* hold I ~40 Hz */
 
 /* Plant FF: bipolar Vcoil ≈ 2·m·Vbus. L-FF off while tuning PI.
  * Live/UART override uses the same 1st-order as analog RC (C32/C33 =
