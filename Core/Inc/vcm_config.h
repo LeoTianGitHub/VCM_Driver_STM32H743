@@ -65,23 +65,11 @@
 #define VCM_IREF_POLARITY       (-1.0f)
 
 /* PI: ~3 kHz crossover @ 50 kHz (delay ~1.5 period ≈ 30 us, PM ~55°).
- * Analog command ceiling is still C32/C33 (~1.5 kHz). */
+ * Analog command ceiling is still C32/C33 (~1.5 kHz).
+ * PI follows observer î (2-pt IFB mean is the measurement, not the fdbk). */
 #define VCM_KP                  0.23f
 #define VCM_KI                  460.0f
 #define VCM_I_INTEGRAL_LIM      0.30f
-
-/* Two-zone PI. Track: raw err, full Kp/Ki.
- * Hold: reduced Kp/Ki. P on ~400 Hz (kill period residual, keep position).
- * I on ~40 Hz (don't integrate residual). Dither on. Exit only on IREF step. */
-#define VCM_PI_STEADY_EN          1U
-#define VCM_PI_SS_KP_SCALE        0.40f
-#define VCM_PI_SS_KI_SCALE        0.15f
-#define VCM_PI_SS_DIREF_A         0.020f
-#define VCM_PI_SS_EXIT_DIREF_A    0.050f
-#define VCM_PI_SS_ERR_A           0.040f
-#define VCM_PI_SS_ERR_LPF_A       0.020f   /* enter detect ~160 Hz */
-#define VCM_PI_SS_P_LPF_A         0.049f   /* hold P ~400 Hz */
-#define VCM_PI_SS_I_LPF_A         0.0050f  /* hold I ~40 Hz */
 
 /* Plant FF: bipolar Vcoil ≈ 2·m·Vbus. L-FF off while tuning PI.
  * Live/UART override uses the same 1st-order as analog RC (C32/C33 =
@@ -98,6 +86,21 @@
 #define VCM_L_FF_DIDT_MAX       4000.0f
 
 /*
+ * Current observer on the 2-point duration-weighted IFB mean.
+ *   î ← î + (Ts/L)(2·m·Vbus − R·î) + α(ifb_avg − î)
+ * m is last applied (HRTIM preload = voltage that produced this IFB).
+ *
+ * 8 kHz (α=0.63) was a no-op for buzzing: each sample is 63% raw IFB, so PI
+ * still chases CSA/dither aliases. HF current must come from the voltage
+ * model; IFB only trims DC. fo=800 Hz keeps 3 kHz PI (Kp/Ki unchanged).
+ * Live: g_vcm.i_obs_a  0.049≈400 Hz  0.096≈800 Hz  0.118≈1 kHz  0.63≈8 kHz.
+ */
+#define VCM_I_OBS_HZ            800.0f
+#define VCM_I_OBS_A             0.096f   /* 1-exp(-2*pi*800/50000) */
+#define VCM_I_OBS_R_OHM         (VCM_COIL_R_OHM + VCM_IFB_RS_OHM)
+#define VCM_I_OBS_TS_OVER_L     (VCM_PWM_TS_S / VCM_COIL_L_H)
+
+/*
  * 0: keep PWM at standstill (competitor-style; no software dead zone).
  * 1: clamp after |IREF| < ENTER for DEB samples (quiet idle).
  */
@@ -107,7 +110,7 @@
 #define VCM_IDLE_ENTER_DEB         5000U  /* 100 ms @ 50 kHz */
 
 /* No error/IREF deadband: PI stays closed through zero (small-current linear).
- * Quiet idle is UART 'Z' only. 2-sample coast mean is the PI feedback. */
+ * Quiet idle is UART 'Z' only. 2-sample mean feeds the observer, PI follows î. */
 
 /* 0: enable goes straight to RUN (no IFB/IREF offset cal, no 2 ms open loop).
  * 1: measure offsets for VCM_IFB_CAL_SAMPLES with m=0 before closing PI. */
@@ -124,7 +127,7 @@
                                  ((float)VCM_HRTIM_CLOCK_HZ / (float)VCM_ADC_KERNEL_HZ) + 0.5f)) /* 330 */
 #define VCM_ADC_MIN_COAST          ((uint16_t)(2U * VCM_ADC_TRIG_EDGE_MARGIN + \
                                  VCM_ADC_SMP_DELAY)) /* ~2.7 us quiet window */
-#define VCM_ADC_N                  2U     /* + and − slots; duration-weighted → PI */
+#define VCM_ADC_N                  2U     /* + and − slots; duration-weighted → observer */
 
 /* ADCTRG1 = TA CMP2 | TB CMP3. DMA length 2.
  * Prefer coast midpoint. If coast < MIN_COAST, sample inside the MOS ON pulse

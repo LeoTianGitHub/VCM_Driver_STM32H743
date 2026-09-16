@@ -1,6 +1,6 @@
 /**
  * @file    vcm_ctrl.h
- * @brief   VCM current-loop API - PI + R/L FF, tri-level / bipolar PWM
+ * @brief   VCM current-loop API - observer + PI + R/L FF, tri-level PWM
  */
 #ifndef VCM_CTRL_H
 #define VCM_CTRL_H
@@ -23,9 +23,11 @@ typedef struct
   float iref_a;
   float iref_offset_a;
   float ifb_a;
-  float ifb_avg_a;     /* this PWM period mean of coast samples → PI */
+  float ifb_avg_a;     /* 2-pt duration-weighted mean (scope / OCP / UART G) */
+  float ifb_hat_a;     /* observer current → PI */
+  float ifb_filt_a;    /* Live: alias of ifb_hat_a */
   float ifb_ip_a;      /* +coast sample */
-  float ifb_im_a;      /* -coast sample */
+  float ifb_im_a;      /* −coast sample */
   float ifb_raw_a;
   float ifb_offset_a;
   float iref_cal_acc;
@@ -35,7 +37,8 @@ typedef struct
   float kp;
   float ki;
   float ff_mod_per_a;
-  float iref_lpf_a;    /* Live/F command LPF α; 0.262 ≈ analog 1.45 kHz */
+  float iref_lpf_a;    /* Live/F command LPF α; 0.167 ≈ analog 1.45 kHz */
+  float i_obs_a;       /* observer α; 0.096 ≈ 800 Hz @ 50 kHz */
   float ifb_cal_acc;
   float iref_override_a;
   float cal_iref_mean;      /* EMA for UART 'G' */
@@ -53,7 +56,7 @@ typedef struct
   uint8_t calib_valid;
   uint8_t iref_override_en;
   uint8_t iref_hold_en;       /* 1 = UART 'Z': PI off, equal dither */
-  uint8_t pi_steady;          /* 1 = hold: reduced PI, P@400Hz I@40Hz */
+  uint8_t pi_steady;          /* unused, always 0: no ΔIREF hold */
   uint8_t pwm_mode;           /* VCM_PWM_MODE_*; Live Expr / UART B|T */
   uint32_t isr_ticks;
   uint32_t start_count;

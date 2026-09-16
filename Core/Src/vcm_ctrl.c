@@ -1,6 +1,6 @@
 /**
  * @file    vcm_ctrl.c
- * @brief   HRTIM H-bridge + PI + R/L FF + tri-level / bipolar PWM
+ * @brief   HRTIM H-bridge + current observer + PI + R/L FF + tri-level PWM
  */
 #include "vcm_ctrl.h"
 #include "vcm_config.h"
@@ -18,6 +18,9 @@ static void VCM_FaultPin_Set(bool fault_active);
 static void VCM_LoopStateReset(void);
 static float VCM_Absf(float x);
 static float VCM_PiStep(float ref, float fdbk);
+static void VCM_IobsUpdate(float ifb, uint8_t meas_ok);
+static uint8_t VCM_CoastFits(uint16_t after_edge, uint16_t before_edge);
+static uint16_t VCM_OnPulseTrig(uint16_t start, uint16_t len);
 static void VCM_HRTIM_SetChop(uint32_t timer_idx, uint8_t chop);
 static void VCM_UartWrite(const char *s);
 static void VCM_UartWriteI32(int32_t v);
@@ -34,11 +37,6 @@ static float vcm_iref_z1;
 static int8_t vcm_tri_sign; /* +1: A chops / B low; -1: B chops / A low; 0: unset */
 static uint16_t vcm_coast_wp = 1U;
 static uint16_t vcm_coast_wn = 1U;
-#if VCM_PI_STEADY_EN
-static float vcm_err_lpf;
-static float vcm_err_p;
-static float vcm_err_i;
-#endif
 static uint32_t vcm_cal_done_ms;
 static uint32_t vcm_en_off_ms;
 static uint16_t vcm_en_off_samples;
@@ -67,14 +65,46 @@ static void VCM_LoopStateReset(void)
   vcm_iref_z1 = 0.0f;
   vcm_tri_sign = 0;
   g_vcm.ifb_avg_a = 0.0f;
+  g_vcm.ifb_hat_a = 0.0f;
+  g_vcm.ifb_filt_a = 0.0f;
   g_vcm.ifb_ip_a = 0.0f;
   g_vcm.ifb_im_a = 0.0f;
   g_vcm.pi_steady = 0U;
-#if VCM_PI_STEADY_EN
-  vcm_err_lpf = 0.0f;
-  vcm_err_p = 0.0f;
-  vcm_err_i = 0.0f;
-#endif
+}
+
+/*
+ * Luenberger observer: voltage model from last applied m, correct with 2-pt IFB.
+ * Skip the innovation if this period's pair is missing (predict only).
+ */
+static void VCM_IobsUpdate(float ifb, uint8_t meas_ok)
+{
+  float i = g_vcm.ifb_hat_a;
+  float a = g_vcm.i_obs_a;
+  float v = 2.0f * g_vcm.mod * VCM_VBUS_V;
+
+  i += VCM_I_OBS_TS_OVER_L * (v - (VCM_I_OBS_R_OHM * i));
+  if (meas_ok != 0U)
+  {
+    if (a < 0.0f)
+    {
+      a = 0.0f;
+    }
+    if (a > 1.0f)
+    {
+      a = 1.0f;
+    }
+    i += a * (ifb - i);
+  }
+  if (i > VCM_I_OCP_A)
+  {
+    i = VCM_I_OCP_A;
+  }
+  else if (i < -VCM_I_OCP_A)
+  {
+    i = -VCM_I_OCP_A;
+  }
+  g_vcm.ifb_hat_a = i;
+  g_vcm.ifb_filt_a = i;
 }
 
 /*
@@ -83,7 +113,6 @@ static void VCM_LoopStateReset(void)
  */
 static float VCM_PiStep(float ref, float fdbk)
 {
-  float err;
   float m_ff;
   float m_unsat;
   float m;
@@ -111,11 +140,6 @@ static float VCM_PiStep(float ref, float fdbk)
         g_vcm.pi_steady = 0U;
         vcm_idle_deb = 0U;
         vcm_iref_z1 = ref;
-#if VCM_PI_STEADY_EN
-        vcm_err_lpf = 0.0f;
-        vcm_err_p = 0.0f;
-        vcm_err_i = 0.0f;
-#endif
         return 0.0f;
       }
     }
@@ -139,11 +163,6 @@ static float VCM_PiStep(float ref, float fdbk)
       g_vcm.mod_ff = 0.0f;
       g_vcm.pi_steady = 0U;
       vcm_iref_z1 = ref;
-#if VCM_PI_STEADY_EN
-      vcm_err_lpf = 0.0f;
-      vcm_err_p = 0.0f;
-      vcm_err_i = 0.0f;
-#endif
       return 0.0f;
     }
   }
@@ -163,50 +182,16 @@ static float VCM_PiStep(float ref, float fdbk)
     g_vcm.mod_ff = 0.0f;
     g_vcm.pi_steady = 0U;
     vcm_iref_z1 = ref;
-#if VCM_PI_STEADY_EN
-    vcm_err_lpf = 0.0f;
-    vcm_err_p = 0.0f;
-    vcm_err_i = 0.0f;
-#endif
     return 0.0f;
   }
 #endif
 
-  err = ref - fdbk;
-
-#if VCM_PI_STEADY_EN
-  {
-    float dref = VCM_Absf(ref - vcm_iref_z1);
-    float eabs;
-
-    vcm_err_lpf += VCM_PI_SS_ERR_LPF_A * (err - vcm_err_lpf);
-    vcm_err_p += VCM_PI_SS_P_LPF_A * (err - vcm_err_p);
-    vcm_err_i += VCM_PI_SS_I_LPF_A * (err - vcm_err_i);
-    eabs = VCM_Absf(vcm_err_lpf);
-    if (dref > VCM_PI_SS_EXIT_DIREF_A)
-    {
-      g_vcm.pi_steady = 0U;
-    }
-    else if ((dref <= VCM_PI_SS_DIREF_A) && (eabs <= VCM_PI_SS_ERR_A))
-    {
-      g_vcm.pi_steady = 1U;
-    }
-  }
-#endif
+  g_vcm.pi_steady = 0U;
 
   kp = g_vcm.kp;
   ki = g_vcm.ki;
-  err_p = err;
-  err_i = err;
-#if VCM_PI_STEADY_EN
-  if (g_vcm.pi_steady != 0U)
-  {
-    kp *= VCM_PI_SS_KP_SCALE;
-    ki *= VCM_PI_SS_KI_SCALE;
-    err_p = vcm_err_p;
-    err_i = vcm_err_i;
-  }
-#endif
+  err_p = ref - fdbk;
+  err_i = err_p;
 
   di_dt = (ref - vcm_iref_z1) * (float)VCM_CTRL_FREQ_HZ;
   vcm_iref_z1 = ref;
@@ -290,7 +275,6 @@ static void VCM_HRTIM_SetAdcTrigs2(uint16_t t_plus, uint16_t t_minus)
   {
     t_minus = hi;
   }
-
   __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_COMPAREUNIT_2, t_plus);
   __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_B, HRTIM_COMPAREUNIT_3, t_minus);
 }
@@ -310,7 +294,6 @@ static void VCM_AdcSpan2(uint16_t t_lo, uint16_t t_hi)
   t1 = (uint16_t)(t_lo + ((2U * span) / 3U));
   VCM_HRTIM_SetAdcTrigs2(t0, t1);
 }
-
 int VCM_AdcStart(void)
 {
   uint32_t n;
@@ -1172,7 +1155,8 @@ void VCM_CurrentLoop_IRQHandler(void)
   VCM_DiagService();
 #endif
 
-  m = VCM_PiStep(g_vcm.iref_a, g_vcm.ifb_avg_a);
+  VCM_IobsUpdate(g_vcm.ifb_avg_a, g_vcm.adc_pair_ok);
+  m = VCM_PiStep(g_vcm.iref_a, g_vcm.ifb_hat_a);
   g_vcm.mod = m;
   VCM_HRTIM_ApplyDuty(m);
 }
@@ -1182,6 +1166,8 @@ void VCM_Init(void)
   g_vcm.iref_a = 0.0f;
   g_vcm.ifb_a = 0.0f;
   g_vcm.ifb_avg_a = 0.0f;
+  g_vcm.ifb_hat_a = 0.0f;
+  g_vcm.ifb_filt_a = 0.0f;
   g_vcm.ifb_ip_a = 0.0f;
   g_vcm.ifb_im_a = 0.0f;
   g_vcm.ifb_raw_a = 0.0f;
@@ -1203,6 +1189,7 @@ void VCM_Init(void)
   g_vcm.ki = VCM_KI;
   g_vcm.ff_mod_per_a = VCM_FF_MOD_PER_A;
   g_vcm.iref_lpf_a = VCM_IREF_OVR_LPF_A;
+  g_vcm.i_obs_a = VCM_I_OBS_A;
   g_vcm.state = VCM_STATE_IDLE;
   g_vcm.fault_flags = 0U;
   g_vcm.adc1_ovr_cnt = 0U;
@@ -1311,6 +1298,8 @@ uint8_t VCM_ServiceUartCmd(uint8_t cmd)
     VCM_UartWriteMilli(g_vcm.cal_ifb_mean);
     VCM_UartWrite(" ifb_avg_mA=");
     VCM_UartWriteMilli(g_vcm.ifb_avg_a);
+    VCM_UartWrite(" ifb_hat_mA=");
+    VCM_UartWriteMilli(g_vcm.ifb_hat_a);
     VCM_UartWrite(" ip_mA=");
     VCM_UartWriteMilli(g_vcm.ifb_ip_a);
     VCM_UartWrite(" im_mA=");
