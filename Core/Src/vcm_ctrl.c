@@ -19,6 +19,7 @@ static void VCM_FaultPin_Set(bool fault_active);
 static void VCM_LoopStateReset(void);
 static float VCM_Absf(float x);
 static float VCM_PiStep(float ref, float fdbk);
+static void VCM_IobsUpdate(float ifb, uint8_t meas_ok);
 static void VCM_HRTIM_SetChop(uint32_t timer_idx, uint8_t chop);
 static void VCM_UartWrite(const char *s);
 static void VCM_UartFlush(void);
@@ -107,9 +108,58 @@ static void VCM_LoopStateReset(void)
 }
 
 /*
+ * Luenberger observer: voltage model from last applied m, correct with 2-pt IFB.
+ * Skip the innovation if this period's pair is missing (predict only).
+ */
+static void VCM_IobsUpdate(float ifb, uint8_t meas_ok)
+{
+  float i = g_vcm.ifb_hat_a;
+  float a = g_vcm.i_obs_a;
+  float l = g_vcm.coil_l_h;
+  float vb = g_vcm.vbus_v;
+  float r = g_vcm.coil_r_ohm + VCM_IFB_RS_OHM;
+  float v;
+  float ts_l;
+
+  if (l < 1.0e-4f)
+  {
+    l = 1.0e-4f;
+  }
+  if (vb < 1.0f)
+  {
+    vb = 1.0f;
+  }
+  v = 2.0f * g_vcm.mod * vb;
+  ts_l = VCM_PWM_TS_S / l;
+  i += ts_l * (v - (r * i));
+  if (meas_ok != 0U)
+  {
+    if (a < 0.0f)
+    {
+      a = 0.0f;
+    }
+    if (a > 1.0f)
+    {
+      a = 1.0f;
+    }
+    i += a * (ifb - i);
+  }
+  if (i > VCM_I_OCP_A)
+  {
+    i = VCM_I_OCP_A;
+  }
+  else if (i < -VCM_I_OCP_A)
+  {
+    i = -VCM_I_OCP_A;
+  }
+  g_vcm.ifb_hat_a = i;
+  g_vcm.ifb_filt_a = i;
+}
+
+/*
  * m = Kp*e + Ki*∫e + R·I_ff + L·di/dt_ff
  * Long-idle clamp for true standstill only (not AC zero-cross).
- * Hold-zone PI (pi_steady) after IREF is quiet for 3 ms.
+ * Feedback is observer î (ifb_hat), not raw ifb_avg.
  */
 static float VCM_PiStep(float ref, float fdbk)
 {
@@ -256,8 +306,25 @@ static float VCM_PiStep(float ref, float fdbk)
 
   di_dt = (ref - vcm_iref_z1) * (float)VCM_CTRL_FREQ_HZ;
   vcm_iref_z1 = ref;
+  if (di_dt > VCM_L_FF_DIDT_MAX)
+  {
+    di_dt = VCM_L_FF_DIDT_MAX;
+  }
+  else if (di_dt < -VCM_L_FF_DIDT_MAX)
+  {
+    di_dt = -VCM_L_FF_DIDT_MAX;
+  }
 
-  m_ff = (ref * g_vcm.ff_mod_per_a) + (di_dt * VCM_L_FF_MOD_PER_A);
+  {
+    float l_ff;
+    float vb = g_vcm.vbus_v;
+    if (vb < 1.0f)
+    {
+      vb = 1.0f;
+    }
+    l_ff = VCM_L_FF_SCALE * g_vcm.coil_l_h / (2.0f * vb);
+    m_ff = (ref * g_vcm.ff_mod_per_a) + (di_dt * l_ff);
+  }
   g_vcm.mod_ff = m_ff;
 
   m_unsat = (kp * err_p) + g_vcm.integral + m_ff;
@@ -1191,9 +1258,8 @@ void VCM_CurrentLoop_IRQHandler(void)
   VCM_DiagService();
 #endif
 
-  m = VCM_PiStep(g_vcm.iref_a, g_vcm.ifb_avg_a);
-  g_vcm.ifb_hat_a = g_vcm.ifb_avg_a;
-  g_vcm.ifb_filt_a = g_vcm.ifb_avg_a;
+  VCM_IobsUpdate(g_vcm.ifb_avg_a, g_vcm.adc_pair_ok);
+  m = VCM_PiStep(g_vcm.iref_a, g_vcm.ifb_hat_a);
   g_vcm.mod = m;
   VCM_HRTIM_ApplyDuty(m);
 }

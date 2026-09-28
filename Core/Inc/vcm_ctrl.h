@@ -1,6 +1,6 @@
 /**
  * @file    vcm_ctrl.h
- * @brief   VCM current-loop API - two-zone PI + R/L FF, tri-level PWM
+ * @brief   VCM current-loop API - observer + single PI + R/L FF, tri-level PWM
  */
 #ifndef VCM_CTRL_H
 #define VCM_CTRL_H
@@ -23,9 +23,9 @@ typedef struct
   float iref_a;
   float iref_offset_a;
   float ifb_a;
-  float ifb_avg_a;     /* period mean of I+/I- → PI */
-  float ifb_hat_a;     /* host telem alias of ifb_avg (wire-feed has no live observer) */
-  float ifb_filt_a;    /* Live: alias of ifb_avg_a */
+  float ifb_avg_a;     /* 2-pt duration-weighted mean (scope / OCP / UART G) */
+  float ifb_hat_a;     /* observer current → PI */
+  float ifb_filt_a;    /* Live: alias of ifb_hat_a */
   float ifb_ip_a;
   float ifb_im_a;
   float ifb_raw_a;
@@ -38,10 +38,10 @@ typedef struct
   float ki;
   float ff_mod_per_a;
   float iref_lpf_a;    /* Live/F command LPF α; 0.838 ≈ analog 14.5 kHz */
-  float i_obs_a;       /* host-tunable; not used by wire-feed PI */
-  float vbus_v;        /* plant Vbus; R-FF */
+  float i_obs_a;       /* observer α; 0.118 ≈ 1 kHz @ 50 kHz */
+  float vbus_v;        /* plant Vbus; observer + R-FF */
   float coil_l_h;      /* plant L */
-  float coil_r_ohm;    /* plant R (coil; Rs added in FF) */
+  float coil_r_ohm;    /* plant R (coil; Rs added in observer/FF) */
   float ifb_cal_acc;
   float iref_override_a;
   float cal_iref_mean;      /* EMA for UART 'G' */
@@ -59,7 +59,7 @@ typedef struct
   uint8_t calib_valid;
   uint8_t iref_override_en;
   uint8_t iref_hold_en;       /* 1 = UART 'Z': PI off, equal dither */
-  uint8_t pi_steady;          /* 1 = hold: reduced PI, P@400Hz I@50Hz */
+  uint8_t pi_steady;          /* unused when VCM_PI_STEADY_EN=0 */
   uint8_t pwm_mode;           /* VCM_PWM_MODE_*; Live Expr / UART B|T */
   uint32_t isr_ticks;
   uint32_t start_count;

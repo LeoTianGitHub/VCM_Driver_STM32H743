@@ -2,9 +2,8 @@
  * @file    vcm_config.h
  * @brief   VCM current loop - PI + R/L FF, tri-level PWM @ 50 kHz
  *
- * Wire-feed: same small-I path as Z驱动 — 1 us dual-pulse three-level
- * (no bipolar pocket at zero). UART B/T can still switch bipolar.
- * Host protocol / Flash NV / versions merged from Z驱动.
+ * Wire-feed plant (1 A / 912 µH / 5.42 Ω). Control matches Z驱动:
+ * single-stage PI on observer î, 1 us dual-pulse three-level.
  */
 #ifndef VCM_CONFIG_H
 #define VCM_CONFIG_H
@@ -70,29 +69,25 @@
 #define VCM_IREF_POLARITY       (-1.0f)
 
 /* PI: ~3 kHz crossover @ 50 kHz (zero ~320 Hz, PM ~55°).
- * One gain set at every current. Analog RC (C32/C33) is ~14.5 kHz, above this loop.
- * PI follows the 2-pt IFB mean (wire-feed). Host may still tune obs α for future use. */
+ * One gain set at every current (same as Z驱动). Analog RC ~14.5 kHz.
+ * PI follows observer î, not the raw 2-pt IFB. */
 #define VCM_KP                  0.23f
 #define VCM_KI                  460.0f
 #define VCM_I_INTEGRAL_LIM      0.30f
 
-/* Two-zone PI (from Z驱动, retuned for 1 A / 3 V/A IREF).
- * Track: raw err, full Kp/Ki. Hold: Kp×0.45, Ki×0.18, P@400 Hz, I@50 Hz.
- * IREF is 10× more V/A than Z, so dIREF doors are tighter.
- * IFB is I+/I− duration-weighted (same ADC as Z). Enter |err| ~25 mA.
- * 3 ms dwell: 200 Hz AC peaks look quiet for <1 ms — must not enter hold. */
-#define VCM_PI_STEADY_EN          1U
+/* 0 = single-stage PI + observer (Z驱动). 1 = legacy two-zone hold (unused). */
+#define VCM_PI_STEADY_EN          0U
 #define VCM_PI_SS_KP_SCALE        0.45f
 #define VCM_PI_SS_KI_SCALE        0.18f
 #define VCM_PI_SS_DIREF_A         0.008f
 #define VCM_PI_SS_EXIT_DIREF_A    0.020f
 #define VCM_PI_SS_ERR_A           0.025f
-#define VCM_PI_SS_ERR_LPF_A       0.020f   /* enter detect ~160 Hz */
-#define VCM_PI_SS_P_LPF_A         0.049f   /* hold P ~400 Hz */
-#define VCM_PI_SS_I_LPF_A         0.0063f  /* hold I ~50 Hz */
-#define VCM_PI_SS_IN_TICKS        150U    /* 3 ms @ 50 kHz */
+#define VCM_PI_SS_ERR_LPF_A       0.020f
+#define VCM_PI_SS_P_LPF_A         0.049f
+#define VCM_PI_SS_I_LPF_A         0.0063f
+#define VCM_PI_SS_IN_TICKS        150U
 
-/* Plant FF: bipolar Vcoil ≈ 2·m·Vbus. No LPF on FF. */
+/* Plant FF: bipolar Vcoil ≈ 2·m·Vbus. L-FF off while tuning PI. */
 #define VCM_COIL_L_H            0.000912f /* 912 µH */
 #define VCM_COIL_R_OHM          5.42f
 #define VCM_VBUS_V              48.0f
@@ -107,8 +102,9 @@
 #define VCM_L_FF_DIDT_MAX       4000.0f
 
 /*
- * Observer α kept for host $S/$D compatibility with Z驱动.
- * Wire-feed PI currently uses ifb_avg; fo=1 kHz if later enabled.
+ * Current observer on the 2-point duration-weighted IFB mean (same as Z驱动).
+ *   î ← î + (Ts/L)(2·m·Vbus − R·î) + α(ifb_avg − î)
+ * Live: g_vcm.i_obs_a  0.061≈500 Hz  0.096≈800 Hz  0.118≈1 kHz  0.63≈8 kHz.
  */
 #define VCM_I_OBS_HZ            1000.0f
 #define VCM_I_OBS_A             0.118f   /* 1-exp(-2*pi*1000/50000) */

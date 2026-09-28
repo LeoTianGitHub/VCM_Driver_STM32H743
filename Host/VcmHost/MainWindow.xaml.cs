@@ -194,7 +194,12 @@ public partial class MainWindow : Window
             }
             else if (line.StartsWith("NV BUSY", StringComparison.Ordinal))
             {
-                _nvQuietUntil = DateTime.UtcNow.AddSeconds(8);
+                /* Sector erase can take seconds; never shorten the pending window. */
+                var until = DateTime.UtcNow.AddSeconds(30);
+                if (until > _nvQuietUntil)
+                {
+                    _nvQuietUntil = until;
+                }
             }
         }
         else if (line.StartsWith("ERR", StringComparison.Ordinal) && _nvPending)
@@ -427,7 +432,7 @@ public partial class MainWindow : Window
     private void SaveNv_Click(object sender, RoutedEventArgs e)
     {
         _nvPending = true;
-        _nvQuietUntil = DateTime.UtcNow.AddSeconds(15);
+        _nvQuietUntil = DateTime.UtcNow.AddSeconds(30);
         NvText.Text = "Flash：正在擦写 Sector3…";
         AppendLog("发送 $W");
         _link.SendExclusive("$W\n");
@@ -444,7 +449,7 @@ public partial class MainWindow : Window
         }
 
         _nvPending = true;
-        _nvQuietUntil = DateTime.UtcNow.AddSeconds(15);
+        _nvQuietUntil = DateTime.UtcNow.AddSeconds(30);
         NvText.Text = "Flash：正在擦除 Sector3…";
         AppendLog("发送 $E");
         _link.SendExclusive("$E\n");
