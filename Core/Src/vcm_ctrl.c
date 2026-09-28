@@ -4,6 +4,7 @@
  */
 #include "vcm_ctrl.h"
 #include "vcm_config.h"
+#include "vcm_nv.h"
 #include <stdint.h>
 
 VCM_Handle_t g_vcm;
@@ -20,8 +21,20 @@ static float VCM_Absf(float x);
 static float VCM_PiStep(float ref, float fdbk);
 static void VCM_HRTIM_SetChop(uint32_t timer_idx, uint8_t chop);
 static void VCM_UartWrite(const char *s);
+static void VCM_UartFlush(void);
 static void VCM_UartWriteI32(int32_t v);
 static void VCM_UartWriteMilli(float a);
+static void VCM_UartWriteMicro(float a);
+static float VCM_Clampf(float x, float lo, float hi);
+static int32_t VCM_ParseI32(const char **pp, const char *end);
+static void VCM_HostTelem(void);
+static void VCM_HostWriteVersion(void);
+static void VCM_HostDump(void);
+static void VCM_HostIrefMa(int32_t ma);
+static void VCM_HostSet(const char *p, const char *end);
+static void VCM_HostLine(char *line, uint16_t n);
+
+static volatile uint8_t vcm_nv_req;
 #if VCM_DIAG_EN
 static void VCM_DiagService(void);
 #endif
@@ -57,6 +70,18 @@ static float VCM_Absf(float x)
   return (x >= 0.0f) ? x : -x;
 }
 
+void VCM_PlantSyncFf(void)
+{
+  float vb = g_vcm.vbus_v;
+  if (vb < 1.0f)
+  {
+    vb = 1.0f;
+  }
+  g_vcm.ff_mod_per_a = VCM_FF_SCALE * (g_vcm.coil_r_ohm + VCM_IFB_RS_OHM) /
+                       (2.0f * vb);
+}
+
+
 static void VCM_LoopStateReset(void)
 {
   g_vcm.integral = 0.0f;
@@ -68,6 +93,8 @@ static void VCM_LoopStateReset(void)
   vcm_iref_z1 = 0.0f;
   vcm_tri_sign = 0;
   g_vcm.ifb_avg_a = 0.0f;
+  g_vcm.ifb_hat_a = 0.0f;
+  g_vcm.ifb_filt_a = 0.0f;
   g_vcm.ifb_ip_a = 0.0f;
   g_vcm.ifb_im_a = 0.0f;
   g_vcm.pi_steady = 0U;
@@ -157,6 +184,27 @@ static float VCM_PiStep(float ref, float fdbk)
   vcm_idle_deb = 0U;
   (void)ref_abs;
 #endif
+
+  /* UART 'Z' sets iref_hold_en. Live/F writing 0 A still runs PI. */
+  if ((g_vcm.iref_hold_en != 0U) &&
+      ((g_vcm.iref_override_en == 0U) || (g_vcm.iref_override_a != 0.0f)))
+  {
+    g_vcm.iref_hold_en = 0U;
+  }
+  if (g_vcm.iref_hold_en != 0U)
+  {
+    g_vcm.integral = 0.0f;
+    g_vcm.mod_ff = 0.0f;
+    g_vcm.pi_steady = 0U;
+    vcm_iref_z1 = ref;
+#if VCM_PI_STEADY_EN
+    vcm_err_lpf = 0.0f;
+    vcm_err_p = 0.0f;
+    vcm_err_i = 0.0f;
+    vcm_pi_ss_cnt = 0U;
+#endif
+    return 0.0f;
+  }
 
   err = ref - fdbk;
 
@@ -1144,6 +1192,8 @@ void VCM_CurrentLoop_IRQHandler(void)
 #endif
 
   m = VCM_PiStep(g_vcm.iref_a, g_vcm.ifb_avg_a);
+  g_vcm.ifb_hat_a = g_vcm.ifb_avg_a;
+  g_vcm.ifb_filt_a = g_vcm.ifb_avg_a;
   g_vcm.mod = m;
   VCM_HRTIM_ApplyDuty(m);
 }
@@ -1153,6 +1203,8 @@ void VCM_Init(void)
   g_vcm.iref_a = 0.0f;
   g_vcm.ifb_a = 0.0f;
   g_vcm.ifb_avg_a = 0.0f;
+  g_vcm.ifb_hat_a = 0.0f;
+  g_vcm.ifb_filt_a = 0.0f;
   g_vcm.ifb_ip_a = 0.0f;
   g_vcm.ifb_im_a = 0.0f;
   g_vcm.ifb_raw_a = 0.0f;
@@ -1162,6 +1214,7 @@ void VCM_Init(void)
   g_vcm.pwm_armed = 0U;
   g_vcm.pwm_mode = VCM_PWM_MODE;
   g_vcm.iref_override_en = 0U;
+  g_vcm.iref_hold_en = 0U;
   g_vcm.iref_override_a = 0.0f;
   g_vcm.cal_iref_mean = 0.0f;
   g_vcm.cal_ifb_mean = 0.0f;
@@ -1171,6 +1224,12 @@ void VCM_Init(void)
   g_vcm.kp = VCM_KP;
   g_vcm.ki = VCM_KI;
   g_vcm.ff_mod_per_a = VCM_FF_MOD_PER_A;
+  g_vcm.iref_lpf_a = VCM_IREF_OVR_LPF_A;
+  g_vcm.i_obs_a = VCM_I_OBS_A;
+  g_vcm.vbus_v = VCM_VBUS_V;
+  g_vcm.coil_l_h = VCM_COIL_L_H;
+  g_vcm.coil_r_ohm = VCM_COIL_R_OHM;
+  (void)VCM_NvLoad();
   g_vcm.state = VCM_STATE_IDLE;
   g_vcm.fault_flags = 0U;
   g_vcm.adc1_ovr_cnt = 0U;
@@ -1260,6 +1319,447 @@ static void VCM_UartWriteMilli(float a)
   VCM_UartWriteI32(ma);
 }
 
+static void VCM_UartFlush(void)
+{
+  while ((huart1.Instance->ISR & USART_ISR_TC) == 0U)
+  {
+  }
+}
+
+static void VCM_UartWriteMicro(float a)
+{
+  int32_t u = (int32_t)((a * 1000000.0f) + ((a >= 0.0f) ? 0.5f : -0.5f));
+  VCM_UartWriteI32(u);
+}
+
+static float VCM_Clampf(float x, float lo, float hi)
+{
+  if (x < lo)
+  {
+    return lo;
+  }
+  if (x > hi)
+  {
+    return hi;
+  }
+  return x;
+}
+
+static int32_t VCM_ParseI32(const char **pp, const char *end)
+{
+  const char *p = *pp;
+  int32_t s = 1;
+  int32_t v = 0;
+
+  if (p >= end)
+  {
+    return 0;
+  }
+  if (*p == '-')
+  {
+    s = -1;
+    p++;
+  }
+  else if (*p == '+')
+  {
+    p++;
+  }
+  while ((p < end) && (*p >= '0') && (*p <= '9'))
+  {
+    v = (v * 10) + (int32_t)(*p - '0');
+    p++;
+  }
+  *pp = p;
+  return s * v;
+}
+
+static void VCM_HostTelem(void)
+{
+  VCM_UartWrite("TL iref_ma=");
+  VCM_UartWriteMilli(g_vcm.iref_a);
+  VCM_UartWrite(" ihat_ma=");
+  VCM_UartWriteMilli(g_vcm.ifb_hat_a);
+  VCM_UartWrite(" iavg_ma=");
+  VCM_UartWriteMilli(g_vcm.ifb_avg_a);
+  VCM_UartWrite(" ip_ma=");
+  VCM_UartWriteMilli(g_vcm.ifb_ip_a);
+  VCM_UartWrite(" im_ma=");
+  VCM_UartWriteMilli(g_vcm.ifb_im_a);
+  VCM_UartWrite(" mod_e6=");
+  VCM_UartWriteMicro(g_vcm.mod);
+  VCM_UartWrite(" ff_e6=");
+  VCM_UartWriteMicro(g_vcm.mod_ff);
+  VCM_UartWrite(" kp_e3=");
+  VCM_UartWriteMilli(g_vcm.kp);
+  VCM_UartWrite(" ki_e3=");
+  VCM_UartWriteMilli(g_vcm.ki);
+  VCM_UartWrite(" obs_e3=");
+  VCM_UartWriteMilli(g_vcm.i_obs_a);
+  VCM_UartWrite(" lpf_e3=");
+  VCM_UartWriteMilli(g_vcm.iref_lpf_a);
+  VCM_UartWrite(" ov=");
+  VCM_UartWriteI32((int32_t)g_vcm.iref_override_en);
+  VCM_UartWrite(" hold=");
+  VCM_UartWriteI32((int32_t)g_vcm.iref_hold_en);
+  VCM_UartWrite(" armed=");
+  VCM_UartWriteI32((int32_t)g_vcm.pwm_armed);
+  VCM_UartWrite(" mode=");
+  VCM_UartWriteI32((int32_t)g_vcm.pwm_mode);
+  VCM_UartWrite(" state=");
+  VCM_UartWriteI32((int32_t)g_vcm.state);
+  VCM_UartWrite(" fault=");
+  VCM_UartWriteI32((int32_t)g_vcm.fault_flags);
+  VCM_UartWrite(" pair=");
+  VCM_UartWriteI32((int32_t)g_vcm.adc_pair_ok);
+  VCM_UartWrite(" adc_ifb=");
+  VCM_UartWriteI32((int32_t)g_vcm.adc_ifb);
+  VCM_UartWrite(" adc_iref=");
+  VCM_UartWriteI32((int32_t)g_vcm.adc_iref);
+  VCM_UartWrite(" ovr1=");
+  VCM_UartWriteI32((int32_t)g_vcm.adc1_ovr_cnt);
+  VCM_UartWrite(" ovr2=");
+  VCM_UartWriteI32((int32_t)g_vcm.adc2_ovr_cnt);
+  VCM_UartWrite(" ticks=");
+  VCM_UartWriteI32((int32_t)g_vcm.isr_ticks);
+  VCM_UartWrite("\r\n");
+}
+
+static void VCM_HostWriteVersion(void)
+{
+  VCM_UartWrite("hw=");
+  VCM_UartWriteI32((int32_t)VCM_HW_VERSION);
+  VCM_UartWrite(" fw=");
+  VCM_UartWriteI32((int32_t)VCM_FW_VERSION_MAJOR);
+  VCM_UartWrite(".");
+  VCM_UartWriteI32((int32_t)VCM_FW_VERSION_MINOR);
+  VCM_UartWrite(".");
+  VCM_UartWriteI32((int32_t)VCM_FW_VERSION_PATCH);
+}
+
+static void VCM_HostDump(void)
+{
+  VCM_UartWrite("PR ");
+  VCM_HostWriteVersion();
+  VCM_UartWrite(" proto=");
+  VCM_UartWriteI32((int32_t)VCM_HOST_PROTO);
+  VCM_UartWrite(" pwm=");
+  VCM_UartWriteI32((int32_t)VCM_PWM_FREQ_HZ);
+  VCM_UartWrite(" imax_ma=");
+  VCM_UartWriteMilli(VCM_I_MAX_A);
+  VCM_UartWrite(" kp_e3=");
+  VCM_UartWriteMilli(g_vcm.kp);
+  VCM_UartWrite(" ki_e3=");
+  VCM_UartWriteMilli(g_vcm.ki);
+  VCM_UartWrite(" obs_e3=");
+  VCM_UartWriteMilli(g_vcm.i_obs_a);
+  VCM_UartWrite(" lpf_e3=");
+  VCM_UartWriteMilli(g_vcm.iref_lpf_a);
+  VCM_UartWrite(" ff_e6=");
+  VCM_UartWriteMicro(g_vcm.ff_mod_per_a);
+  VCM_UartWrite(" vbus_e3=");
+  VCM_UartWriteMilli(g_vcm.vbus_v);
+  VCM_UartWrite(" r_e3=");
+  VCM_UartWriteMilli(g_vcm.coil_r_ohm);
+  VCM_UartWrite(" l_e6=");
+  VCM_UartWriteMicro(g_vcm.coil_l_h);
+  VCM_UartWrite(" cal_ma=");
+  VCM_UartWriteMilli(VCM_CAL_FORCE_A);
+  VCM_UartWrite(" nv=");
+  VCM_UartWriteI32(VCM_NvIsValid());
+  VCM_UartWrite("\r\n");
+}
+
+static void VCM_HostIrefMa(int32_t ma)
+{
+  float a = (float)ma * 0.001f;
+  a = VCM_Clampf(a, -VCM_I_MAX_A, VCM_I_MAX_A);
+  g_vcm.iref_override_a = a;
+  g_vcm.iref_override_en = 1U;
+  g_vcm.iref_hold_en = 0U;
+}
+
+static void VCM_HostSet(const char *p, const char *end)
+{
+  uint8_t nset = 0U;
+  uint8_t plant = 0U;
+  uint8_t ff_set = 0U;
+
+  while (p < end)
+  {
+    const char *key;
+    uint8_t klen = 0U;
+    int32_t v;
+
+    while ((p < end) && ((*p == ' ') || (*p == '\t')))
+    {
+      p++;
+    }
+    if (p >= end)
+    {
+      break;
+    }
+    key = p;
+    while ((p < end) && (*p != '=') && (*p != ' '))
+    {
+      p++;
+      klen++;
+    }
+    if ((p >= end) || (*p != '='))
+    {
+      break;
+    }
+    p++;
+    v = VCM_ParseI32(&p, end);
+
+    if ((klen == 2U) && (key[0] == 'k') && (key[1] == 'p'))
+    {
+      g_vcm.kp = VCM_Clampf((float)v * 0.001f, 0.0f, 5.0f);
+      nset++;
+    }
+    else if ((klen == 2U) && (key[0] == 'k') && (key[1] == 'i'))
+    {
+      g_vcm.ki = VCM_Clampf((float)v * 0.001f, 0.0f, 20000.0f);
+      nset++;
+    }
+    else if ((klen == 3U) && (key[0] == 'o') && (key[1] == 'b') && (key[2] == 's'))
+    {
+      g_vcm.i_obs_a = VCM_Clampf((float)v * 0.001f, 0.0f, 1.0f);
+      nset++;
+    }
+    else if ((klen == 3U) && (key[0] == 'l') && (key[1] == 'p') && (key[2] == 'f'))
+    {
+      g_vcm.iref_lpf_a = VCM_Clampf((float)v * 0.001f, 0.02f, 1.0f);
+      nset++;
+    }
+    else if ((klen == 2U) && (key[0] == 'f') && (key[1] == 'f'))
+    {
+      g_vcm.ff_mod_per_a = VCM_Clampf((float)v * 0.000001f, 0.0f, 0.20f);
+      ff_set = 1U;
+      nset++;
+    }
+    else if ((klen == 4U) && (key[0] == 'v') && (key[1] == 'b') &&
+             (key[2] == 'u') && (key[3] == 's'))
+    {
+      g_vcm.vbus_v = VCM_Clampf((float)v * 0.001f, VCM_VBUS_MIN_V, VCM_VBUS_MAX_V);
+      plant = 1U;
+      nset++;
+    }
+    else if ((klen == 1U) && (key[0] == 'r'))
+    {
+      g_vcm.coil_r_ohm = VCM_Clampf((float)v * 0.001f, 0.10f, 50.0f);
+      plant = 1U;
+      nset++;
+    }
+    else if ((klen == 1U) && (key[0] == 'l'))
+    {
+      g_vcm.coil_l_h = VCM_Clampf((float)v * 0.000001f, 0.00010f, 0.020f);
+      plant = 1U;
+      nset++;
+    }
+    else if ((klen == 4U) && (key[0] == 'i') && (key[1] == 'r') &&
+             (key[2] == 'e') && (key[3] == 'f'))
+    {
+      VCM_HostIrefMa(v);
+      nset++;
+    }
+  }
+
+  if ((plant != 0U) && (ff_set == 0U))
+  {
+    VCM_PlantSyncFf();
+  }
+
+  VCM_UartWrite((nset != 0U) ? "OK\r\n" : "ERR\r\n");
+}
+
+static void VCM_HostLine(char *line, uint16_t n)
+{
+  char cmd;
+  const char *p;
+  const char *end = line + n;
+
+  if ((n < 2U) || (line[0] != '$'))
+  {
+    return;
+  }
+  cmd = line[1];
+  p = line + 2;
+  while ((p < end) && ((*p == ' ') || (*p == '\t')))
+  {
+    p++;
+  }
+
+  if (cmd == 'P')
+  {
+    VCM_HostTelem();
+    return;
+  }
+  if (cmd == 'D')
+  {
+    VCM_HostDump();
+    return;
+  }
+  if (cmd == 'I')
+  {
+    VCM_UartWrite("ID VCM_H743 ");
+    VCM_HostWriteVersion();
+    VCM_UartWrite(" proto=");
+    VCM_UartWriteI32((int32_t)VCM_HOST_PROTO);
+    VCM_UartWrite(" pwm=");
+    VCM_UartWriteI32((int32_t)VCM_PWM_FREQ_HZ);
+    VCM_UartWrite(" nv=ram\r\n");
+    return;
+  }
+  if (cmd == 'S')
+  {
+    VCM_HostSet(p, end);
+    return;
+  }
+  if (cmd == 'R')
+  {
+    int32_t ma = VCM_ParseI32(&p, end);
+    VCM_HostIrefMa(ma);
+    VCM_UartWrite("OK\r\n");
+    return;
+  }
+  if (cmd == 'C')
+  {
+    VCM_ClearFault();
+    VCM_UartWrite("OK\r\n");
+    return;
+  }
+  if (cmd == 'W')
+  {
+    vcm_nv_req = 1U;
+    VCM_UartWrite("NV BUSY\r\n");
+    return;
+  }
+  if (cmd == 'E')
+  {
+    vcm_nv_req = 2U;
+    VCM_UartWrite("NV BUSY\r\n");
+    return;
+  }
+  if (cmd == 'L')
+  {
+    int err = VCM_NvLoad();
+    VCM_UartWrite((err == 0) ? "NV LOAD\r\n" : "NV EMPTY\r\n");
+    return;
+  }
+  if ((cmd == 'G') || (cmd == 'F') || (cmd == 'Z') || (cmd == 'A') ||
+      (cmd == 'B') || (cmd == 'T'))
+  {
+    (void)VCM_ServiceUartCmd((uint8_t)cmd);
+    return;
+  }
+  VCM_UartWrite("ERR ");
+  VCM_UartWrite(line);
+  VCM_UartWrite("\r\n");
+}
+
+/* $W/$E set vcm_nv_req from the UART parser. Erase runs here, in the main loop. */
+void VCM_NvPoll(void)
+{
+  uint8_t req = vcm_nv_req;
+  int err;
+
+  if (req == 0U)
+  {
+    return;
+  }
+  vcm_nv_req = 0U;
+  VCM_UartFlush();
+  if (req == 1U)
+  {
+    err = VCM_NvSave();
+    if (err == 0)
+    {
+      VCM_UartWrite("NV SAVE\r\n");
+    }
+    else
+    {
+      VCM_UartWrite("NV ERR ");
+      VCM_UartWriteI32(err);
+      VCM_UartWrite("\r\n");
+    }
+  }
+  else if (req == 2U)
+  {
+    err = VCM_NvFactory();
+    if (err == 0)
+    {
+      VCM_UartWrite("NV FACTORY\r\n");
+    }
+    else
+    {
+      VCM_UartWrite("NV ERR ");
+      VCM_UartWriteI32(err);
+      VCM_UartWrite("\r\n");
+    }
+  }
+}
+
+void VCM_ServiceUartByte(uint8_t b)
+{
+  static char line[VCM_HOST_LINE_MAX];
+  static uint8_t n;
+  static uint8_t in_line;
+
+  if (in_line == 0U)
+  {
+    if (b == (uint8_t)'$')
+    {
+      in_line = 1U;
+      n = 0U;
+      line[n++] = '$';
+      return;
+    }
+    (void)VCM_ServiceUartCmd(b);
+    return;
+  }
+
+  /* A second '$' means a new frame started; drop the partial line. */
+  if (b == (uint8_t)'$')
+  {
+    n = 0U;
+    line[n++] = '$';
+    return;
+  }
+
+  if ((b == (uint8_t)'\n') || (b == (uint8_t)'\r'))
+  {
+    if (n >= 2U)
+    {
+      line[n] = '\0';
+      VCM_HostLine(line, n);
+    }
+    in_line = 0U;
+    n = 0U;
+    return;
+  }
+
+  if (n < (VCM_HOST_LINE_MAX - 1U))
+  {
+    line[n++] = (char)b;
+  }
+  else
+  {
+    in_line = 0U;
+    n = 0U;
+  }
+}
+
+/*
+ * Gain-cal UART (115200):
+ *   G 鈥?dump EMA iref/ifb (mA) and raw ADC for clamp/scope瀵圭収
+ *   F 鈥?force IREF = VCM_CAL_FORCE_A (default 0.5 A)
+ *   Z 鈥?force IREF = 0
+ *   A 鈥?clear override, use analog IREF
+ *
+ * Host: "$P\\n" telemetry, "$D\\n" params, "$S kp=..\\n" (see vcm_config.h).
+ * After F: clamp_meter_A / firmware_ifb_mA 鈫?next IFB_GAIN_TRIM.
+ * After known Vin: (Vin/20*10) / firmware_iref 鈫?IREF_GAIN_TRIM.
+ */
 /*
  * Gain-cal UART (115200):
  *   G — dump EMA iref/ifb (mA) and raw ADC for clamp/scope对照
@@ -1303,6 +1803,7 @@ uint8_t VCM_ServiceUartCmd(uint8_t cmd)
   {
     g_vcm.iref_override_a = VCM_CAL_FORCE_A;
     g_vcm.iref_override_en = 1U;
+    g_vcm.iref_hold_en = 0U;
     VCM_UartWrite("FORCE ");
     VCM_UartWriteMilli(VCM_CAL_FORCE_A);
     VCM_UartWrite(" mA cmd\r\n");
@@ -1312,12 +1813,14 @@ uint8_t VCM_ServiceUartCmd(uint8_t cmd)
   {
     g_vcm.iref_override_a = 0.0f;
     g_vcm.iref_override_en = 1U;
+    g_vcm.iref_hold_en = 1U;
     VCM_UartWrite("FORCE 0\r\n");
     return 1U;
   }
   if (cmd == VCM_UART_CMD_ANALOG)
   {
     g_vcm.iref_override_en = 0U;
+    g_vcm.iref_hold_en = 0U;
     VCM_UartWrite("ANALOG\r\n");
     return 1U;
   }

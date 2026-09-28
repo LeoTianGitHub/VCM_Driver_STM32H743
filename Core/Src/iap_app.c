@@ -22,19 +22,24 @@ void IAP_ServiceUartCommand(void)
 {
   uint8_t cmd;
 
-  /* Poll RXNE only — avoid HAL_UART_Receive (can pull in RCC float clock math) */
-  if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_RXNE) == 0U)
+  if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_ORE) != 0U)
   {
-    return;
-  }
-  cmd = (uint8_t)(huart1.Instance->RDR & 0xFFU);
-
-  if ((cmd == IAP_CMD_ENTER_BOOT) || (cmd == IAP_CMD_UPGRADE))
-  {
-    IAP_RequestBootloader();
-    return;
+    __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_OREF);
   }
 
-  /* Gain-cal / force-current helpers (ASCII G F Z A) */
-  (void)VCM_ServiceUartCmd(cmd);
+  /* Drain every pending byte; one-byte-per-loop drops $W at 115200. */
+  while (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_RXNE) != 0U)
+  {
+    cmd = (uint8_t)(huart1.Instance->RDR & 0xFFU);
+
+    if ((cmd == IAP_CMD_ENTER_BOOT) || (cmd == IAP_CMD_UPGRADE))
+    {
+      IAP_RequestBootloader();
+      return;
+    }
+
+    VCM_ServiceUartByte(cmd);
+  }
+
+  VCM_NvPoll();
 }

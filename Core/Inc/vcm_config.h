@@ -4,6 +4,7 @@
  *
  * Wire-feed: same small-I path as Z驱动 — 1 us dual-pulse three-level
  * (no bipolar pocket at zero). UART B/T can still switch bipolar.
+ * Host protocol / Flash NV / versions merged from Z驱动.
  */
 #ifndef VCM_CONFIG_H
 #define VCM_CONFIG_H
@@ -68,9 +69,11 @@
 #define VCM_IREF_COUNTS_PER_A   (VCM_IREF_V_PER_A * VCM_ADC_COUNTS_PER_V)
 #define VCM_IREF_POLARITY       (-1.0f)
 
-/* PI trim around plant FF */
-#define VCM_KP                  0.30f
-#define VCM_KI                  600.0f
+/* PI: ~3 kHz crossover @ 50 kHz (zero ~320 Hz, PM ~55°).
+ * One gain set at every current. Analog RC (C32/C33) is ~14.5 kHz, above this loop.
+ * PI follows the 2-pt IFB mean (wire-feed). Host may still tune obs α for future use. */
+#define VCM_KP                  0.23f
+#define VCM_KI                  460.0f
 #define VCM_I_INTEGRAL_LIM      0.30f
 
 /* Two-zone PI (from Z驱动, retuned for 1 A / 3 V/A IREF).
@@ -93,11 +96,24 @@
 #define VCM_COIL_L_H            0.000912f /* 912 µH */
 #define VCM_COIL_R_OHM          5.42f
 #define VCM_VBUS_V              48.0f
+#define VCM_VBUS_MIN_V          24.0f
+#define VCM_VBUS_MAX_V          48.0f
 #define VCM_FF_SCALE            1.0f
-#define VCM_L_FF_SCALE          0.85f
+#define VCM_L_FF_SCALE          0.0f
 #define VCM_FF_MOD_PER_A        (VCM_FF_SCALE * (VCM_COIL_R_OHM + VCM_IFB_RS_OHM) / \
                                  (2.0f * VCM_VBUS_V))
 #define VCM_L_FF_MOD_PER_A      (VCM_L_FF_SCALE * VCM_COIL_L_H / (2.0f * VCM_VBUS_V))
+#define VCM_IREF_OVR_LPF_A      0.838f   /* 1-exp(-2*pi*14500/50000); Live-tunable */
+#define VCM_L_FF_DIDT_MAX       4000.0f
+
+/*
+ * Observer α kept for host $S/$D compatibility with Z驱动.
+ * Wire-feed PI currently uses ifb_avg; fo=1 kHz if later enabled.
+ */
+#define VCM_I_OBS_HZ            1000.0f
+#define VCM_I_OBS_A             0.118f   /* 1-exp(-2*pi*1000/50000) */
+#define VCM_I_OBS_R_OHM         (VCM_COIL_R_OHM + VCM_IFB_RS_OHM)
+#define VCM_I_OBS_TS_OVER_L     (VCM_PWM_TS_S / VCM_COIL_L_H)
 
 /*
  * 0: keep PWM at IREF=0 (same as Z驱动; no software dead zone).
@@ -139,7 +155,7 @@
 #define VCM_PROCESS_LED_Pin        GPIO_PIN_3
 #define VCM_PROCESS_LED_GPIO_Port  GPIOE
 
-#define VCM_EN_GLITCH_SAMPLES   8U
+#define VCM_EN_GLITCH_SAMPLES   20U  /* ~400 us @ 50 kHz */
 #define VCM_EN_OFF_DEBOUNCE_MS  2U
 #define VCM_CAL_REUSE_MS        5000U
 
@@ -156,5 +172,21 @@
 #define VCM_UART_CMD_ANALOG     ((uint8_t)'A')  /* clear override, use ADC */
 #define VCM_UART_CMD_BIPOLAR    ((uint8_t)'B')  /* pwm_mode = bipolar */
 #define VCM_UART_CMD_TRILEVEL   ((uint8_t)'T')  /* pwm_mode = three-level */
+
+/* Host frames: "$" ... "\n" @ 115200. Avoid 0x05 / 0xA0 (IAP).
+ *   $I  identify     $P  telemetry     $D  dump params
+ *   $S kp=230 ki=460000 obs=118 lpf=838 ff=37916 vbus=48000 r=3620 l=1188
+ *      (kp/obs/lpf/vbus/r ×1000, ki ×1000, ff ×1e6, l = µH)
+ *   $R <mA>  IREF override (PI on)   $Z $A $F $B $T $C $G as lines too
+ *   $W  save RAM params to FLASH Sector3   $L reload   $E factory erase
+ *
+ * Version in $I / $D: hw=<board> fw=<major>.<minor>.<patch>
+ */
+#define VCM_HOST_PROTO          2U
+#define VCM_HOST_LINE_MAX       128U
+#define VCM_HW_VERSION          1U   /* PCB / hardware revision */
+#define VCM_FW_VERSION_MAJOR    1U
+#define VCM_FW_VERSION_MINOR    0U
+#define VCM_FW_VERSION_PATCH    0U
 
 #endif /* VCM_CONFIG_H */
