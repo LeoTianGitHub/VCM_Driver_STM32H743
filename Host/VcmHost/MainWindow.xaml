@@ -1,0 +1,228 @@
+﻿<Window x:Class="VcmHost.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="VCM 电流环调试 — STM32H743"
+        Width="1320" Height="860"
+        MinWidth="1100" MinHeight="700"
+        Background="{StaticResource BgBrush}"
+        Loaded="Window_Loaded"
+        Closing="Window_Closing">
+    <DockPanel Margin="12">
+        <Border DockPanel.Dock="Top" Background="{StaticResource CardBrush}"
+                BorderBrush="{StaticResource LineBrush}" BorderThickness="1"
+                CornerRadius="6" Padding="10" Margin="0,0,0,10">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal">
+                    <Label Content="串口"/>
+                    <ComboBox x:Name="PortBox" Width="130"/>
+                    <Button Content="刷新" Click="RefreshPorts_Click"/>
+                    <Button x:Name="ConnectBtn" Content="连接" Style="{StaticResource AccentBtn}" Click="Connect_Click"/>
+                    <Label Content="115200 8N1" Foreground="{StaticResource MuteBrush}"/>
+                    <CheckBox x:Name="PollBox" Content="轮询" IsChecked="True" Margin="16,0,8,0"/>
+                    <Label Content="Hz"/>
+                    <TextBox x:Name="PollHzBox" Width="44" Text="15"/>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <TextBlock x:Name="IdText" Text="未连接" VerticalAlignment="Center"
+                               Foreground="{StaticResource MuteBrush}" Margin="0,0,16,0"/>
+                    <TextBlock x:Name="LinkText" Text="● 断开" VerticalAlignment="Center"
+                               Foreground="{StaticResource DangerBrush}"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="2.2*"/>
+                <ColumnDefinition Width="12"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <DockPanel Grid.Column="0">
+                <UniformGrid DockPanel.Dock="Top" Rows="1" Columns="6" Margin="0,0,0,10">
+                    <Border Background="{StaticResource CardBrush}"
+                            BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,8,0">
+                        <StackPanel>
+                            <TextBlock Text="状态" Foreground="{StaticResource MuteBrush}"/>
+                            <TextBlock x:Name="StateText" Text="—" FontSize="20" FontWeight="SemiBold"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Background="{StaticResource CardBrush}" BorderBrush="{StaticResource LineBrush}"
+                            BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,8,0">
+                        <StackPanel>
+                            <TextBlock Text="IREF (A)" Foreground="{StaticResource IrefBrush}"/>
+                            <TextBlock x:Name="IrefText" Text="—" FontSize="20" FontWeight="SemiBold"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Background="{StaticResource CardBrush}" BorderBrush="{StaticResource LineBrush}"
+                            BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,8,0">
+                        <StackPanel>
+                            <TextBlock Text="î 观测 (A)" Foreground="{StaticResource HatBrush}"/>
+                            <TextBlock x:Name="HatText" Text="—" FontSize="20" FontWeight="SemiBold"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Background="{StaticResource CardBrush}" BorderBrush="{StaticResource LineBrush}"
+                            BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,8,0">
+                        <StackPanel>
+                            <TextBlock Text="IFB 两点 (A)" Foreground="{StaticResource AvgBrush}"/>
+                            <TextBlock x:Name="AvgText" Text="—" FontSize="20" FontWeight="SemiBold"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Background="{StaticResource CardBrush}" BorderBrush="{StaticResource LineBrush}"
+                            BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,8,0">
+                        <StackPanel>
+                            <TextBlock Text="误差 î−ref (A)" Foreground="{StaticResource MuteBrush}"/>
+                            <TextBlock x:Name="ErrText" Text="—" FontSize="20" FontWeight="SemiBold"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Background="{StaticResource CardBrush}" BorderBrush="{StaticResource LineBrush}"
+                            BorderThickness="1" CornerRadius="6" Padding="10">
+                        <StackPanel>
+                            <TextBlock Text="m / 故障" Foreground="{StaticResource MuteBrush}"/>
+                            <TextBlock x:Name="ModText" Text="—" FontSize="20" FontWeight="SemiBold"/>
+                        </StackPanel>
+                    </Border>
+                </UniformGrid>
+
+                <Border DockPanel.Dock="Top" Background="{StaticResource CardBrush}"
+                        BorderBrush="{StaticResource LineBrush}" BorderThickness="1"
+                        CornerRadius="6" Padding="10" Margin="0,0,0,10" Height="280">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <DockPanel Margin="0,0,0,6">
+                            <TextBlock Text="电流波形（约 8 s）" FontWeight="SemiBold"/>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <TextBlock Text="IREF" Foreground="{StaticResource IrefBrush}" Margin="0,0,12,0"/>
+                                <TextBlock Text="î" Foreground="{StaticResource HatBrush}" Margin="0,0,12,0"/>
+                                <TextBlock Text="IFB" Foreground="{StaticResource AvgBrush}"/>
+                            </StackPanel>
+                        </DockPanel>
+                        <Canvas x:Name="Plot" Grid.Row="1" ClipToBounds="True" SizeChanged="Plot_SizeChanged">
+                            <Polyline x:Name="LineIref" Stroke="#FF5B9BD5" StrokeThickness="1.6"/>
+                            <Polyline x:Name="LineHat" Stroke="#FF3DDC97" StrokeThickness="1.6"/>
+                            <Polyline x:Name="LineAvg" Stroke="#FFF0A030" StrokeThickness="1.2"/>
+                            <Line x:Name="ZeroLine" Stroke="#FF3A414C" StrokeThickness="1"/>
+                        </Canvas>
+                    </Grid>
+                </Border>
+
+                <GroupBox Header="给定与模式">
+                    <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="90"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Label Content="IREF 覆盖 (A)"/>
+                            <Slider x:Name="IrefSlider" Grid.Column="1" Minimum="-10" Maximum="10"
+                                    TickFrequency="0.5" IsSnapToTickEnabled="False"
+                                    ValueChanged="IrefSlider_Changed" VerticalAlignment="Center" Margin="8,0"/>
+                            <TextBox x:Name="IrefCmdBox" Grid.Column="2" Text="0.000"/>
+                            <Button Grid.Column="3" Content="下发 $R" Style="{StaticResource AccentBtn}" Click="ApplyIref_Click"/>
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button Content="模拟给定 A" Click="Analog_Click"/>
+                            <Button Content="Force 0.5 A" Click="Force_Click"/>
+                            <Button Content="Z 等宽 dither（关 PI）" Style="{StaticResource DangerBtn}" Click="Zero_Click"/>
+                            <Button Content="清除故障 $C" Click="ClearFault_Click"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Label Content="PWM"/>
+                            <RadioButton x:Name="ModeTri" Content="三电平 T" IsChecked="True" Click="ModeTri_Click"/>
+                            <RadioButton x:Name="ModeBi" Content="双极性 B" Click="ModeBi_Click"/>
+                            <TextBlock x:Name="FlagText" Margin="24,0,0,0" VerticalAlignment="Center"
+                                       Foreground="{StaticResource MuteBrush}" Text="ov=  hold=  armed=  pair="/>
+                        </StackPanel>
+                    </StackPanel>
+                </GroupBox>
+
+                <GroupBox Header="串口日志" VerticalAlignment="Stretch">
+                    <DockPanel LastChildFill="True">
+                        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,8,0,0">
+                            <Button Content="清空" Click="ClearLog_Click"/>
+                            <Button Content="导出 CSV" Click="ExportCsv_Click"/>
+                        </StackPanel>
+                        <TextBox x:Name="LogBox" IsReadOnly="True" TextWrapping="NoWrap"
+                                 VerticalAlignment="Stretch" HorizontalAlignment="Stretch"
+                                 VerticalContentAlignment="Top"
+                                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                                 FontFamily="Consolas" FontSize="12"/>
+                    </DockPanel>
+                </GroupBox>
+            </DockPanel>
+
+            <DockPanel Grid.Column="2">
+                <GroupBox Header="环路参数" DockPanel.Dock="Top">
+                    <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="90"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
+                                <RowDefinition/><RowDefinition/><RowDefinition/>
+                            </Grid.RowDefinitions>
+                            <Label Grid.Row="0" Content="Kp"/>
+                            <TextBox x:Name="KpBox" Grid.Row="0" Grid.Column="1" Margin="0,3" Text="0.23"/>
+                            <Label Grid.Row="1" Content="Ki"/>
+                            <TextBox x:Name="KiBox" Grid.Row="1" Grid.Column="1" Margin="0,3" Text="460"/>
+                            <Label Grid.Row="2" Content="观测 α"/>
+                            <TextBox x:Name="ObsBox" Grid.Row="2" Grid.Column="1" Margin="0,3" Text="0.118"
+                                     LostFocus="ObsAlpha_Changed"/>
+                            <Label Grid.Row="3" Content="观测 Hz"/>
+                            <TextBox x:Name="ObsHzBox" Grid.Row="3" Grid.Column="1" Margin="0,3" Text="1000"
+                                     LostFocus="ObsHz_Changed"/>
+                            <Label Grid.Row="4" Content="IREF LPF α"/>
+                            <TextBox x:Name="LpfBox" Grid.Row="4" Grid.Column="1" Margin="0,3" Text="0.838"/>
+                            <Label Grid.Row="5" Content="R-FF m/A"/>
+                            <TextBox x:Name="FfBox" Grid.Row="5" Grid.Column="1" Margin="0,3" Text="0.0379"/>
+                            <Label Grid.Row="6" Content="Vbus (V)"/>
+                            <TextBox x:Name="VbusBox" Grid.Row="6" Grid.Column="1" Margin="0,3" Text="48"
+                                     LostFocus="Plant_Changed" ToolTip="24–48 V"/>
+                            <Label Grid.Row="7" Content="R (Ω)"/>
+                            <TextBox x:Name="RcoilBox" Grid.Row="7" Grid.Column="1" Margin="0,3" Text="3.62"
+                                     LostFocus="Plant_Changed"/>
+                            <Label Grid.Row="8" Content="L (mH)"/>
+                            <TextBox x:Name="LcoilBox" Grid.Row="8" Grid.Column="1" Margin="0,3" Text="1.188"/>
+                        </Grid>
+                        <TextBlock Margin="0,8,0,8" Foreground="{StaticResource MuteBrush}" TextWrapping="Wrap"
+                                   Text="α≈0.096→800 Hz，0.118→1 kHz。不要回到 0.63（8 kHz），PI 会再追 IFB 毛刺。"/>
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="写入 $S" Style="{StaticResource OkBtn}" Click="ApplyParams_Click"/>
+                            <Button Content="读回 $D" Click="ReadParams_Click"/>
+                        </StackPanel>
+                        <TextBlock x:Name="NvText" Margin="0,8,0,4" Foreground="{StaticResource MuteBrush}"
+                                   Text="Flash：未读（nv=）"/>
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="保存到 Flash $W" Style="{StaticResource AccentBtn}" Click="SaveNv_Click"/>
+                            <Button Content="从 Flash 加载 $L" Click="LoadNv_Click"/>
+                        </StackPanel>
+                        <Button Content="恢复出厂 $E" Style="{StaticResource DangerBtn}" Margin="0,8,0,0"
+                                HorizontalAlignment="Left" Click="FactoryNv_Click"/>
+                        <TextBlock Margin="0,6,0,0" Foreground="{StaticResource MuteBrush}" TextWrapping="Wrap"
+                                   Text="$S 只改 RAM。掉电请再按保存。保存应先出现 NV BUSY，再出现 NV SAVE 或 NV ERR。"/>
+                    </StackPanel>
+                </GroupBox>
+
+                <GroupBox Header="采样对照" VerticalAlignment="Stretch">
+                    <StackPanel>
+                        <TextBlock x:Name="SampText" FontFamily="Consolas" TextWrapping="Wrap"
+                                   Text="ip / im / ADC —"/>
+                        <TextBlock Margin="0,12,0,0" Foreground="{StaticResource MuteBrush}" TextWrapping="Wrap"
+                                   Text="î 应明显比 IFB 两点均值光滑。力控看 î 和 m，不要用 iavg 判断纹波。UART Z 关 PI、等宽 dither；模拟 A 把给定交还给模拟 IREF。"/>
+                    </StackPanel>
+                </GroupBox>
+            </DockPanel>
+        </Grid>
+    </DockPanel>
+</Window>

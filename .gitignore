@@ -53,3 +53,7 @@ dkms.conf
 # STM32CubeIDE build output
 Debug/
 Release/
+
+# .NET VCM host
+Host/**/bin/
+Host/**/obj/

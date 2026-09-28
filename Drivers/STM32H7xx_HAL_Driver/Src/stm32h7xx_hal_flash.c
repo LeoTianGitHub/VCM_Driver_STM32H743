@@ -151,6 +151,10 @@ FLASH_ProcessTypeDef pFlash;
   *
   * @retval HAL_StatusTypeDef HAL Status
   */
+/* Must run from DTCM. Erase may flush I-cache; after PG the 8 stores must
+ * not fetch Bank 1. FLASH_WaitForLastOperation stays in Flash and only runs
+ * while idle, or after the flashword is fully written. */
+__attribute__((section(".RamFunc"), noinline, noclone))
 HAL_StatusTypeDef HAL_FLASH_Program(uint32_t TypeProgram, uint32_t FlashAddress, uint32_t DataAddress)
 {
   HAL_StatusTypeDef status;

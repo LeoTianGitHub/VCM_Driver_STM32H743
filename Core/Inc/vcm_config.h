@@ -64,25 +64,27 @@
 #define VCM_IREF_COUNTS_PER_A   (VCM_IREF_V_PER_A * VCM_ADC_COUNTS_PER_V)
 #define VCM_IREF_POLARITY       (-1.0f)
 
-/* PI: ~3 kHz crossover @ 50 kHz (delay ~1.5 period ≈ 30 us, PM ~55°).
- * Analog command ceiling is still C32/C33 (~1.5 kHz).
- * PI follows observer î (2-pt IFB mean is the measurement, not the fdbk). */
+/* PI: ~3 kHz crossover @ 50 kHz (zero ~320 Hz, PM ~55°).
+ * One gain set at every current. Analog RC (C32/C33) is ~14.5 kHz, above this loop.
+ * PI follows î, not the raw 2-pt IFB. */
 #define VCM_KP                  0.23f
 #define VCM_KI                  460.0f
 #define VCM_I_INTEGRAL_LIM      0.30f
 
 /* Plant FF: bipolar Vcoil ≈ 2·m·Vbus. L-FF off while tuning PI.
  * Live/UART override uses the same 1st-order as analog RC (C32/C33 =
- * 49.9 Ω × 2.2 µF → fc≈1.45 kHz) so Live steps look like analog. */
+ * 49.9 Ω × 220 nF → fc≈14.5 kHz) so Live steps look like analog. */
 #define VCM_COIL_L_H            0.001188f
 #define VCM_COIL_R_OHM          3.62f
 #define VCM_VBUS_V              48.0f
+#define VCM_VBUS_MIN_V          24.0f
+#define VCM_VBUS_MAX_V          48.0f
 #define VCM_FF_SCALE            1.0f
 #define VCM_L_FF_SCALE          0.0f
 #define VCM_FF_MOD_PER_A        (VCM_FF_SCALE * (VCM_COIL_R_OHM + VCM_IFB_RS_OHM) / \
                                  (2.0f * VCM_VBUS_V))
 #define VCM_L_FF_MOD_PER_A      (VCM_L_FF_SCALE * VCM_COIL_L_H / (2.0f * VCM_VBUS_V))
-#define VCM_IREF_OVR_LPF_A      0.167f   /* 1-exp(-2*pi*1450/50000); Live-tunable */
+#define VCM_IREF_OVR_LPF_A      0.838f   /* 1-exp(-2*pi*14500/50000); Live-tunable */
 #define VCM_L_FF_DIDT_MAX       4000.0f
 
 /*
@@ -92,11 +94,11 @@
  *
  * 8 kHz (α=0.63) was a no-op for buzzing: each sample is 63% raw IFB, so PI
  * still chases CSA/dither aliases. HF current must come from the voltage
- * model; IFB only trims DC. fo=800 Hz keeps 3 kHz PI (Kp/Ki unchanged).
- * Live: g_vcm.i_obs_a  0.049≈400 Hz  0.096≈800 Hz  0.118≈1 kHz  0.63≈8 kHz.
+ * model; IFB only trims DC. fo=1 kHz.
+ * Live: g_vcm.i_obs_a  0.061≈500 Hz  0.096≈800 Hz  0.118≈1 kHz  0.63≈8 kHz.
  */
-#define VCM_I_OBS_HZ            800.0f
-#define VCM_I_OBS_A             0.096f   /* 1-exp(-2*pi*800/50000) */
+#define VCM_I_OBS_HZ            1000.0f
+#define VCM_I_OBS_A             0.118f   /* 1-exp(-2*pi*1000/50000) */
 #define VCM_I_OBS_R_OHM         (VCM_COIL_R_OHM + VCM_IFB_RS_OHM)
 #define VCM_I_OBS_TS_OVER_L     (VCM_PWM_TS_S / VCM_COIL_L_H)
 
@@ -165,5 +167,15 @@
 #define VCM_UART_CMD_ANALOG     ((uint8_t)'A')  /* clear override, use ADC */
 #define VCM_UART_CMD_BIPOLAR    ((uint8_t)'B')  /* pwm_mode = bipolar */
 #define VCM_UART_CMD_TRILEVEL   ((uint8_t)'T')  /* pwm_mode = three-level */
+
+/* Host frames: "$" ... "\n" @ 115200. Avoid 0x05 / 0xA0 (IAP).
+ *   $I  identify     $P  telemetry     $D  dump params
+ *   $S kp=230 ki=460000 obs=118 lpf=838 ff=37916 vbus=48000 r=3620 l=1188
+ *      (kp/obs/lpf/vbus/r ×1000, ki ×1000, ff ×1e6, l = µH)
+ *   $R <mA>  IREF override (PI on)   $Z $A $F $B $T $C $G as lines too
+ *   $W  save RAM params to FLASH Sector3   $L reload   $E factory erase
+ */
+#define VCM_HOST_PROTO          2U
+#define VCM_HOST_LINE_MAX       128U
 
 #endif /* VCM_CONFIG_H */

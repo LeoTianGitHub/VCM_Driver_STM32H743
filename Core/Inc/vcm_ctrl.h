@@ -37,8 +37,11 @@ typedef struct
   float kp;
   float ki;
   float ff_mod_per_a;
-  float iref_lpf_a;    /* Live/F command LPF α; 0.167 ≈ analog 1.45 kHz */
-  float i_obs_a;       /* observer α; 0.096 ≈ 800 Hz @ 50 kHz */
+  float iref_lpf_a;    /* Live/F command LPF α; 0.838 ≈ analog 14.5 kHz */
+  float i_obs_a;       /* observer α; 0.118 ≈ 1 kHz @ 50 kHz */
+  float vbus_v;        /* plant Vbus; observer + R-FF */
+  float coil_l_h;      /* plant L */
+  float coil_r_ohm;    /* plant R (coil; Rs added in observer/FF) */
   float ifb_cal_acc;
   float iref_override_a;
   float cal_iref_mean;      /* EMA for UART 'G' */
@@ -80,6 +83,7 @@ extern ADC_HandleTypeDef hadc2;
 extern UART_HandleTypeDef huart1;
 
 void VCM_Init(void);
+void VCM_PlantSyncFf(void);
 void VCM_HRTIM_InitTimers(void);
 void VCM_Start(void);
 void VCM_Stop(void);
@@ -95,5 +99,9 @@ float VCM_AdcToIrefAmpere(uint16_t raw);
 
 /** Handle ASCII cal cmds: G/F/Z/A. Returns 1 if consumed. */
 uint8_t VCM_ServiceUartCmd(uint8_t cmd);
+/** Byte from USART1: legacy G/F/Z/A/B/T or "$...\\n" host frames. */
+void VCM_ServiceUartByte(uint8_t b);
+/** Run deferred $W/$E Flash erase/program from main loop (not from the UART parser). */
+void VCM_NvPoll(void);
 
 #endif /* VCM_CTRL_H */

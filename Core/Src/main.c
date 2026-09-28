@@ -120,7 +120,10 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
+  /* Same as a typical H7 bootloader: keep I-cache on so Flash program
+   * does not re-fetch Bank 1 after PG is set. Do not enable D-cache here —
+   * ADC DMA buffers are not marked non-cacheable. */
+  SCB_EnableICache();
   /* USER CODE END Init */
 
   /* Configure the system clock */
