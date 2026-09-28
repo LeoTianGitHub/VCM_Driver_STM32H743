@@ -28,7 +28,7 @@
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-//#define UID_ENCRYPTION
+#define UID_ENCRYPTION
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/

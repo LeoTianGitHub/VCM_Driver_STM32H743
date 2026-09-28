@@ -11,7 +11,7 @@ dotnet run
 
 或 Visual Studio 打开 `Host/VcmHost/VcmHost.csproj`。
 
-**必须先烧录带 `$` 行协议的固件**（`VCM_HOST_PROTO 1`）。旧固件只能识别单字节 `G F Z A B T`。
+**必须先烧录带 `$` 行协议的固件**（`VCM_HOST_PROTO 2`）。App 链接在 `0x08020000`，需先有 Bootloader；IAP 升级只擦 Sector 1–2。旧固件只能识别单字节 `G F Z A B T`。
 
 不要在本机已连接时用串口助手占用同一 COM；不要发送 `0x05` / `0xA0`（会进 IAP）。
 
@@ -37,9 +37,9 @@ IAP 升级只擦 Sector 1–2，不会清掉参数。不要对 Sector3 做全片
 
 | 主机 | 从机 |
 |------|------|
-| `$I` | `ID VCM_H743 proto=1 pwm=50000` |
+| `$I` | `ID VCM_H743 hw=1 fw=1.0.0 proto=2 pwm=50000 nv=ram` |
 | `$P` | `TL iref_ma=… ihat_ma=… iavg_ma=… …` |
-| `$D` | `PR proto=1 kp_e3=230 ki_e3=460000 obs_e3=118 …` |
+| `$D` | `PR hw=1 fw=1.0.0 proto=2 kp_e3=230 ki_e3=460000 obs_e3=118 …` |
 | `$S kp=… ki=… obs=… lpf=… ff=… vbus=… r=… l=…` | `OK` / `ERR`（vbus/r ×1000，l=µH） |
 | `$R 1500` | IREF 覆盖 1.500 A（PI 开） |
 | `$W` | `NV SAVE` / `NV ERR` 把 RAM 参数写入 Flash |

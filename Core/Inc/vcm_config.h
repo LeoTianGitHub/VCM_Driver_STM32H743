@@ -174,8 +174,14 @@
  *      (kp/obs/lpf/vbus/r ×1000, ki ×1000, ff ×1e6, l = µH)
  *   $R <mA>  IREF override (PI on)   $Z $A $F $B $T $C $G as lines too
  *   $W  save RAM params to FLASH Sector3   $L reload   $E factory erase
+ *
+ * Version in $I / $D: hw=<board> fw=<major>.<minor>.<patch>
  */
 #define VCM_HOST_PROTO          2U
 #define VCM_HOST_LINE_MAX       128U
+#define VCM_HW_VERSION          1U   /* PCB / hardware revision */
+#define VCM_FW_VERSION_MAJOR    1U
+#define VCM_FW_VERSION_MINOR    0U
+#define VCM_FW_VERSION_PATCH    0U
 
 #endif /* VCM_CONFIG_H */

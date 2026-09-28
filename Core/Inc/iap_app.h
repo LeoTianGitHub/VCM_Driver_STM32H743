@@ -3,8 +3,9 @@
  * @brief   Application-side helpers for IAP_UartSTM32H7 bootloader
  *
  * Flash map (match bootloader):
- *   0x08000000  This application (256KB, Sector 0-1). No bootloader.
- *   0x08060000  Parameter sector (Sector 3), not part of the image.
+ *   0x08000000  Bootloader Sector0 (128KB), KEY_BASE @ 0x0801FF00
+ *   0x08020000  This application (256KB, Sector 1-2)
+ *   0x08060000  Parameter sector (Sector 3), not erased by IAP
  *
  * IAP UART: USART1 @ 115200, PB14=TX, PB15=RX (bootloader must use the same pins)
  * Host: after reset / LED blink, send 0x05 within ~3s to start encrypted upgrade.
@@ -15,7 +16,7 @@
 #include <stdint.h>
 
 #define IAP_BOOTLOADER_ADDRESS   0x08000000UL
-#define IAP_APP_ADDRESS          0x08000000UL
+#define IAP_APP_ADDRESS          0x08020000UL
 #define IAP_APP_MAX_SIZE         (256UL * 1024UL)
 #define IAP_KEY_BASE             0x0801FF00UL
 

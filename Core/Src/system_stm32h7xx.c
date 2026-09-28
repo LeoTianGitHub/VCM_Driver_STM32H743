@@ -82,8 +82,9 @@
 /*!< Uncomment the following line if you need to relocate your vector Table in
      Internal SRAM. */
 /* #define VECT_TAB_SRAM */
-/* Must match linker ROM ORIGIN (app @ 0x08000000, no bootloader). */
-#define VECT_TAB_OFFSET  0x00000000UL        /*!< Vector Table base offset field.
+/* Must match linker ROM ORIGIN (IAP app @ 0x08020000).
+ * VTOR = FLASH_BANK1_BASE | VECT_TAB_OFFSET = 0x08000000 + 0x20000. */
+#define VECT_TAB_OFFSET  0x00020000UL        /*!< Vector Table base offset field.
                                       This value must be a multiple of 0x200. */
 /******************************************************************************/
 

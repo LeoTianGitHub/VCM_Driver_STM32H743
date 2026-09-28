@@ -1424,9 +1424,23 @@ static void VCM_HostTelem(void)
   VCM_UartWrite("\r\n");
 }
 
+static void VCM_HostWriteVersion(void)
+{
+  VCM_UartWrite("hw=");
+  VCM_UartWriteI32((int32_t)VCM_HW_VERSION);
+  VCM_UartWrite(" fw=");
+  VCM_UartWriteI32((int32_t)VCM_FW_VERSION_MAJOR);
+  VCM_UartWrite(".");
+  VCM_UartWriteI32((int32_t)VCM_FW_VERSION_MINOR);
+  VCM_UartWrite(".");
+  VCM_UartWriteI32((int32_t)VCM_FW_VERSION_PATCH);
+}
+
 static void VCM_HostDump(void)
 {
-  VCM_UartWrite("PR proto=");
+  VCM_UartWrite("PR ");
+  VCM_HostWriteVersion();
+  VCM_UartWrite(" proto=");
   VCM_UartWriteI32((int32_t)VCM_HOST_PROTO);
   VCM_UartWrite(" pwm=");
   VCM_UartWriteI32((int32_t)VCM_PWM_FREQ_HZ);
@@ -1587,7 +1601,9 @@ static void VCM_HostLine(char *line, uint16_t n)
   }
   if (cmd == 'I')
   {
-    VCM_UartWrite("ID VCM_H743 proto=");
+    VCM_UartWrite("ID VCM_H743 ");
+    VCM_HostWriteVersion();
+    VCM_UartWrite(" proto=");
     VCM_UartWriteI32((int32_t)VCM_HOST_PROTO);
     VCM_UartWrite(" pwm=");
     VCM_UartWriteI32((int32_t)VCM_PWM_FREQ_HZ);
