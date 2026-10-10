@@ -79,7 +79,7 @@ public partial class MainWindow : Window
 
         if (PortBox.SelectedItem is not string port)
         {
-            MessageBox.Show("请选择串口。", "VCM Host");
+            MessageBox.Show("请选择串口。", "VCM电流环调试");
             return;
         }
 
@@ -98,7 +98,7 @@ public partial class MainWindow : Window
         LinkText.Foreground = (Brush)FindResource("OkBrush");
         _nvPending = false;
         _nvQuietUntil = DateTime.MinValue;
-        NvText.Text = "Flash：未读（nv=）";
+        NvText.Text = "Flash：未读";
         AppendLog("连接 " + port);
         _ = Dispatcher.BeginInvoke(async () =>
         {
@@ -435,8 +435,8 @@ public partial class MainWindow : Window
     {
         _nvPending = true;
         _nvQuietUntil = DateTime.UtcNow.AddSeconds(15);
-        NvText.Text = "Flash：正在擦写 Sector3…";
-        AppendLog("发送 $W");
+        NvText.Text = "Flash：正在保存…";
+        AppendLog("保存到 Flash");
         _link.SendExclusive("$W\n");
     }
 
@@ -452,8 +452,8 @@ public partial class MainWindow : Window
 
         _nvPending = true;
         _nvQuietUntil = DateTime.UtcNow.AddSeconds(15);
-        NvText.Text = "Flash：正在擦除 Sector3…";
-        AppendLog("发送 $E");
+        NvText.Text = "Flash：正在恢复出厂…";
+        AppendLog("恢复出厂");
         _link.SendExclusive("$E\n");
     }
 
@@ -461,7 +461,7 @@ public partial class MainWindow : Window
     {
         if (!TryReadUiParams(out var p, out var err))
         {
-            MessageBox.Show(err, "VCM Host");
+            MessageBox.Show(err, "VCM电流环调试");
             return;
         }
 
@@ -472,7 +472,7 @@ public partial class MainWindow : Window
         }
         else
         {
-            MessageBox.Show("串口未连接：已更新界面，未下发 $S。", "VCM Host");
+            MessageBox.Show("串口未连接：已更新界面，未写入板子。", "VCM电流环调试");
         }
     }
 
@@ -527,12 +527,12 @@ public partial class MainWindow : Window
 
         if (!_link.IsOpen)
         {
-            MessageBox.Show("已载入到界面。串口未连接，未下发 $S。", "导入参数");
+            MessageBox.Show("已载入到界面。串口未连接，未写入板子。", "导入参数");
             return;
         }
 
         var send = MessageBox.Show(
-            "参数已载入界面。是否立即写入板子（$S）？\n掉电保持仍需再按「保存到 Flash $W」。",
+            "参数已载入界面。是否立即写入板子？\n掉电保持仍需再按「保存到 Flash」。",
             "导入参数",
             MessageBoxButton.YesNo,
             MessageBoxImage.Question);
@@ -593,7 +593,7 @@ public partial class MainWindow : Window
     {
         var vbus = Math.Clamp(p.Vbus, Protocol.VbusMin, Protocol.VbusMax);
         _link.Send(Protocol.SetLine(p.Kp, p.Ki, p.Obs, p.Lpf, p.Ff, vbus, p.R, p.LMh * 0.001, p.Fdbk));
-        AppendLog("发送 $S（导入/写入）");
+        AppendLog("写入参数");
     }
 
     private void Plant_Changed(object sender, RoutedEventArgs e)

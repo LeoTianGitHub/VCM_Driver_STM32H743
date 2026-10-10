@@ -32,6 +32,14 @@
         <Style TargetType="ComboBox">
             <Setter Property="MinWidth" Value="110"/>
             <Setter Property="Padding" Value="8,4"/>
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+        </Style>
+        <!-- Popup uses a light system background; keep item text dark for readability. -->
+        <Style TargetType="ComboBoxItem">
+            <Setter Property="Foreground" Value="#FF1A1F26"/>
+            <Setter Property="Background" Value="#FFF5F6F8"/>
+            <Setter Property="Padding" Value="8,4"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
         </Style>
         <Style TargetType="TextBox">
             <Setter Property="Background" Value="#FF1B2027"/>
