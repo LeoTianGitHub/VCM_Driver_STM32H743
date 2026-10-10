@@ -31,7 +31,8 @@ typedef struct
   float vbus_v;
   float coil_l_h;
   float coil_r_ohm;
-  uint32_t rsv[4];
+  uint32_t pi_fdbk; /* v3: VCM_PI_FDBK_* */
+  uint32_t rsv[3];
 } VCM_Nv_t;
 
 _Static_assert(sizeof(VCM_Nv_t) == 64U, "NV record must be two H7 flash words");
@@ -76,6 +77,7 @@ static void VCM_NvCapture(VCM_Nv_t *nv)
   nv->vbus_v = g_vcm.vbus_v;
   nv->coil_l_h = g_vcm.coil_l_h;
   nv->coil_r_ohm = g_vcm.coil_r_ohm;
+  nv->pi_fdbk = (uint32_t)g_vcm.pi_fdbk;
   nv->crc = VCM_NvCrc(nv);
 }
 
@@ -101,6 +103,10 @@ static void VCM_NvApply(const VCM_Nv_t *nv)
     g_vcm.coil_l_h = nv->coil_l_h;
     g_vcm.coil_r_ohm = nv->coil_r_ohm;
   }
+  if (nv->version >= 3U)
+  {
+    g_vcm.pi_fdbk = (nv->pi_fdbk != 0U) ? VCM_PI_FDBK_OBS : VCM_PI_FDBK_AVG;
+  }
 }
 
 static const VCM_Nv_t *VCM_NvFlash(void)
@@ -113,7 +119,7 @@ int VCM_NvIsValid(void)
   const VCM_Nv_t *nv = VCM_NvFlash();
 
   if ((nv->magic != VCM_NV_MAGIC) ||
-      ((nv->version != 1U) && (nv->version != VCM_NV_VERSION)))
+      (nv->version < 1U) || (nv->version > VCM_NV_VERSION))
   {
     return 0;
   }
@@ -221,6 +227,7 @@ int VCM_NvFactory(void)
   g_vcm.coil_r_ohm = VCM_COIL_R_OHM;
   g_vcm.ff_mod_per_a = VCM_FF_MOD_PER_A;
   g_vcm.pwm_mode = VCM_PWM_MODE;
+  g_vcm.pi_fdbk = VCM_PI_FDBK_DEFAULT;
 
   return err;
 }

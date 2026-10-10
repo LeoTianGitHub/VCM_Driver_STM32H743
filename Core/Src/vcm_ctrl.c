@@ -1193,7 +1193,11 @@ void VCM_CurrentLoop_IRQHandler(void)
 #endif
 
   VCM_IobsUpdate(g_vcm.ifb_avg_a, g_vcm.adc_pair_ok);
-  m = VCM_PiStep(g_vcm.iref_a, g_vcm.ifb_hat_a);
+  {
+    float fdbk = (g_vcm.pi_fdbk == VCM_PI_FDBK_AVG) ? g_vcm.ifb_avg_a
+                                                    : g_vcm.ifb_hat_a;
+    m = VCM_PiStep(g_vcm.iref_a, fdbk);
+  }
   g_vcm.mod = m;
   VCM_HRTIM_ApplyDuty(m);
 }
@@ -1230,6 +1234,7 @@ void VCM_Init(void)
   g_vcm.vbus_v = VCM_VBUS_V;
   g_vcm.coil_l_h = VCM_COIL_L_H;
   g_vcm.coil_r_ohm = VCM_COIL_R_OHM;
+  g_vcm.pi_fdbk = VCM_PI_FDBK_DEFAULT;
   (void)VCM_NvLoad();
   g_vcm.state = VCM_STATE_IDLE;
   g_vcm.fault_flags = 0U;
@@ -1397,6 +1402,8 @@ static void VCM_HostTelem(void)
   VCM_UartWriteMilli(g_vcm.i_obs_a);
   VCM_UartWrite(" lpf_e3=");
   VCM_UartWriteMilli(g_vcm.iref_lpf_a);
+  VCM_UartWrite(" fdbk=");
+  VCM_UartWriteI32((int32_t)g_vcm.pi_fdbk);
   VCM_UartWrite(" ov=");
   VCM_UartWriteI32((int32_t)g_vcm.iref_override_en);
   VCM_UartWrite(" hold=");
@@ -1462,6 +1469,8 @@ static void VCM_HostDump(void)
   VCM_UartWriteMilli(g_vcm.coil_r_ohm);
   VCM_UartWrite(" l_e6=");
   VCM_UartWriteMicro(g_vcm.coil_l_h);
+  VCM_UartWrite(" fdbk=");
+  VCM_UartWriteI32((int32_t)g_vcm.pi_fdbk);
   VCM_UartWrite(" cal_ma=");
   VCM_UartWriteMilli(VCM_CAL_FORCE_A);
   VCM_UartWrite(" nv=");
@@ -1554,6 +1563,12 @@ static void VCM_HostSet(const char *p, const char *end)
     {
       g_vcm.coil_l_h = VCM_Clampf((float)v * 0.000001f, 0.00010f, 0.020f);
       plant = 1U;
+      nset++;
+    }
+    else if ((klen == 4U) && (key[0] == 'f') && (key[1] == 'd') &&
+             (key[2] == 'b') && (key[3] == 'k'))
+    {
+      g_vcm.pi_fdbk = (v != 0) ? VCM_PI_FDBK_OBS : VCM_PI_FDBK_AVG;
       nset++;
     }
     else if ((klen == 4U) && (key[0] == 'i') && (key[1] == 'r') &&

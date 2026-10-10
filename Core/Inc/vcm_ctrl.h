@@ -60,6 +60,7 @@ typedef struct
   uint8_t iref_override_en;
   uint8_t iref_hold_en;       /* 1 = UART 'Z': PI off, equal dither */
   uint8_t pi_steady;          /* unused, always 0: no ΔIREF hold */
+  uint8_t pi_fdbk;            /* VCM_PI_FDBK_*: 0=ifb_avg 1=ifb_hat */
   uint8_t pwm_mode;           /* VCM_PWM_MODE_*; Live Expr / UART B|T */
   uint32_t isr_ticks;
   uint32_t start_count;

@@ -8,7 +8,7 @@
 #include <stdint.h>
 
 #define VCM_NV_MAGIC     0x314D4356UL /* 'VCM1' */
-#define VCM_NV_VERSION   2U
+#define VCM_NV_VERSION   3U
 #define VCM_NV_ADDR      0x08060000UL
 
 int VCM_NvLoad(void);          /* 0 = applied, 1 = empty/bad (keep compile defaults) */

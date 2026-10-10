@@ -1,4 +1,4 @@
-﻿<Window x:Class="VcmHost.MainWindow"
+<Window x:Class="VcmHost.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="VCM 电流环调试 — STM32H743"
@@ -170,36 +170,45 @@
                             </Grid.ColumnDefinitions>
                             <Grid.RowDefinitions>
                                 <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
-                                <RowDefinition/><RowDefinition/><RowDefinition/>
+                                <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
                             </Grid.RowDefinitions>
                             <Label Grid.Row="0" Content="Kp"/>
                             <TextBox x:Name="KpBox" Grid.Row="0" Grid.Column="1" Margin="0,3" Text="0.23"/>
                             <Label Grid.Row="1" Content="Ki"/>
                             <TextBox x:Name="KiBox" Grid.Row="1" Grid.Column="1" Margin="0,3" Text="460"/>
-                            <Label Grid.Row="2" Content="观测 α"/>
-                            <TextBox x:Name="ObsBox" Grid.Row="2" Grid.Column="1" Margin="0,3" Text="0.118"
+                            <Label Grid.Row="2" Content="PI 反馈" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Margin="0,3">
+                                <RadioButton x:Name="FdbkObs" Content="观测 î" IsChecked="True" Margin="0,0,12,0"
+                                             GroupName="PiFdbk" ToolTip="fdbk=1：PiStep(iref, ifb_hat)"/>
+                                <RadioButton x:Name="FdbkAvg" Content="两点 IFB" GroupName="PiFdbk"
+                                             ToolTip="fdbk=0：PiStep(iref, ifb_avg)，直跟采样"/>
+                            </StackPanel>
+                            <Label Grid.Row="3" Content="观测 α"/>
+                            <TextBox x:Name="ObsBox" Grid.Row="3" Grid.Column="1" Margin="0,3" Text="0.118"
                                      LostFocus="ObsAlpha_Changed"/>
-                            <Label Grid.Row="3" Content="观测 Hz"/>
-                            <TextBox x:Name="ObsHzBox" Grid.Row="3" Grid.Column="1" Margin="0,3" Text="1000"
+                            <Label Grid.Row="4" Content="观测 Hz"/>
+                            <TextBox x:Name="ObsHzBox" Grid.Row="4" Grid.Column="1" Margin="0,3" Text="1000"
                                      LostFocus="ObsHz_Changed"/>
-                            <Label Grid.Row="4" Content="IREF LPF α"/>
-                            <TextBox x:Name="LpfBox" Grid.Row="4" Grid.Column="1" Margin="0,3" Text="0.838"/>
-                            <Label Grid.Row="5" Content="R-FF m/A"/>
-                            <TextBox x:Name="FfBox" Grid.Row="5" Grid.Column="1" Margin="0,3" Text="0.0379"/>
-                            <Label Grid.Row="6" Content="Vbus (V)"/>
-                            <TextBox x:Name="VbusBox" Grid.Row="6" Grid.Column="1" Margin="0,3" Text="48"
+                            <Label Grid.Row="5" Content="IREF LPF α"/>
+                            <TextBox x:Name="LpfBox" Grid.Row="5" Grid.Column="1" Margin="0,3" Text="0.838"/>
+                            <Label Grid.Row="6" Content="R-FF m/A"/>
+                            <TextBox x:Name="FfBox" Grid.Row="6" Grid.Column="1" Margin="0,3" Text="0.0379"/>
+                            <Label Grid.Row="7" Content="Vbus (V)"/>
+                            <TextBox x:Name="VbusBox" Grid.Row="7" Grid.Column="1" Margin="0,3" Text="48"
                                      LostFocus="Plant_Changed" ToolTip="24–48 V"/>
-                            <Label Grid.Row="7" Content="R (Ω)"/>
-                            <TextBox x:Name="RcoilBox" Grid.Row="7" Grid.Column="1" Margin="0,3" Text="3.62"
+                            <Label Grid.Row="8" Content="R (Ω)"/>
+                            <TextBox x:Name="RcoilBox" Grid.Row="8" Grid.Column="1" Margin="0,3" Text="3.62"
                                      LostFocus="Plant_Changed"/>
-                            <Label Grid.Row="8" Content="L (mH)"/>
-                            <TextBox x:Name="LcoilBox" Grid.Row="8" Grid.Column="1" Margin="0,3" Text="1.188"/>
+                            <Label Grid.Row="9" Content="L (mH)"/>
+                            <TextBox x:Name="LcoilBox" Grid.Row="9" Grid.Column="1" Margin="0,3" Text="1.188"/>
                         </Grid>
                         <TextBlock Margin="0,8,0,8" Foreground="{StaticResource MuteBrush}" TextWrapping="Wrap"
-                                   Text="α≈0.096→800 Hz，0.118→1 kHz。不要回到 0.63（8 kHz），PI 会再追 IFB 毛刺。"/>
+                                   Text="「两点 IFB」= 关观测器进 PI（观测器仍算 î 供波形）。α≈0.118→1 kHz。写入 $S 后生效，掉电需 $W。"/>
                         <StackPanel Orientation="Horizontal">
                             <Button Content="写入 $S" Style="{StaticResource OkBtn}" Click="ApplyParams_Click"/>
                             <Button Content="读回 $D" Click="ReadParams_Click"/>
+                            <Button Content="导出参数" Click="ExportParams_Click"/>
+                            <Button Content="导入参数" Click="ImportParams_Click"/>
                         </StackPanel>
                         <TextBlock x:Name="NvText" Margin="0,8,0,4" Foreground="{StaticResource MuteBrush}"
                                    Text="Flash：未读（nv=）"/>

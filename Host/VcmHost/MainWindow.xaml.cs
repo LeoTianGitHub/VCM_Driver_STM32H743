@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Windows;
@@ -257,6 +257,13 @@ public partial class MainWindow : Window
             LcoilBox.Text = mh.ToString("0.###", CultureInfo.InvariantCulture);
         }
 
+        if (m.ContainsKey("fdbk"))
+        {
+            var obs = Protocol.Int(m, "fdbk") != 0;
+            FdbkObs.IsChecked = obs;
+            FdbkAvg.IsChecked = !obs;
+        }
+
         if (m.ContainsKey("nv"))
         {
             NvText.Text = Protocol.Int(m, "nv") != 0
@@ -297,7 +304,7 @@ public partial class MainWindow : Window
         }
 
         FlagText.Text =
-            $"ov={Protocol.Int(m, "ov")}  hold={Protocol.Int(m, "hold")}  armed={Protocol.Int(m, "armed")}  pair={Protocol.Int(m, "pair")}  ovr={Protocol.Int(m, "ovr1")}/{Protocol.Int(m, "ovr2")}";
+            $"ov={Protocol.Int(m, "ov")}  hold={Protocol.Int(m, "hold")}  armed={Protocol.Int(m, "armed")}  pair={Protocol.Int(m, "pair")}  fdbk={Protocol.Int(m, "fdbk")}  ovr={Protocol.Int(m, "ovr1")}/{Protocol.Int(m, "ovr2")}";
         SampText.Text =
             $"ip = {FmtA(ip)} A\nim = {FmtA(im)} A\nADC IFB = {Protocol.Int(m, "adc_ifb")}\nADC IREF = {Protocol.Int(m, "adc_iref")}\nticks = {Protocol.Int(m, "ticks")}";
 
@@ -452,6 +459,93 @@ public partial class MainWindow : Window
 
     private void ApplyParams_Click(object sender, RoutedEventArgs e)
     {
+        if (!TryReadUiParams(out var p, out var err))
+        {
+            MessageBox.Show(err, "VCM Host");
+            return;
+        }
+
+        ApplyUiParams(p);
+        if (_link.IsOpen)
+        {
+            SendParams(p);
+        }
+        else
+        {
+            MessageBox.Show("串口未连接：已更新界面，未下发 $S。", "VCM Host");
+        }
+    }
+
+    private void ExportParams_Click(object sender, RoutedEventArgs e)
+    {
+        if (!TryReadUiParams(out var p, out var err))
+        {
+            MessageBox.Show(err, "导出参数");
+            return;
+        }
+
+        var dlg = new SaveFileDialog
+        {
+            Filter = "VCM 参数 (*.vcmparams)|*.vcmparams|JSON (*.json)|*.json",
+            FileName = "vcm_loop_params.vcmparams",
+            DefaultExt = ".vcmparams",
+        };
+        if (dlg.ShowDialog() != true)
+        {
+            return;
+        }
+
+        p.Note = "Exported " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+        File.WriteAllText(dlg.FileName, ParamFile.ToJson(p), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        AppendLog("导出参数 " + dlg.FileName);
+    }
+
+    private void ImportParams_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new OpenFileDialog
+        {
+            Filter = "VCM 参数 (*.vcmparams;*.json)|*.vcmparams;*.json|所有文件|*.*",
+        };
+        if (dlg.ShowDialog() != true)
+        {
+            return;
+        }
+
+        LoopParams p;
+        try
+        {
+            p = ParamFile.FromJson(File.ReadAllText(dlg.FileName));
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("导入失败：\n" + ex.Message, "导入参数");
+            return;
+        }
+
+        ApplyUiParams(p);
+        AppendLog("导入参数 " + dlg.FileName);
+
+        if (!_link.IsOpen)
+        {
+            MessageBox.Show("已载入到界面。串口未连接，未下发 $S。", "导入参数");
+            return;
+        }
+
+        var send = MessageBox.Show(
+            "参数已载入界面。是否立即写入板子（$S）？\n掉电保持仍需再按「保存到 Flash $W」。",
+            "导入参数",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+        if (send == MessageBoxResult.Yes)
+        {
+            SendParams(p);
+        }
+    }
+
+    private bool TryReadUiParams(out LoopParams p, out string err)
+    {
+        p = new LoopParams();
+        err = "参数无法解析。";
         if (!TryParseBox(KpBox.Text, out var kp) ||
             !TryParseBox(KiBox.Text, out var ki) ||
             !TryParseBox(ObsBox.Text, out var obs) ||
@@ -461,13 +555,45 @@ public partial class MainWindow : Window
             !TryParseBox(RcoilBox.Text, out var rOhm) ||
             !TryParseBox(LcoilBox.Text, out var lMh))
         {
-            MessageBox.Show("参数无法解析。", "VCM Host");
-            return;
+            return false;
         }
 
-        vbus = Math.Clamp(vbus, Protocol.VbusMin, Protocol.VbusMax);
-        VbusBox.Text = vbus.ToString("0.###", CultureInfo.InvariantCulture);
-        _link.Send(Protocol.SetLine(kp, ki, obs, lpf, ff, vbus, rOhm, lMh * 0.001));
+        p.Kp = kp;
+        p.Ki = ki;
+        p.Obs = obs;
+        p.Lpf = lpf;
+        p.Ff = ff;
+        p.Vbus = Math.Clamp(vbus, Protocol.VbusMin, Protocol.VbusMax);
+        p.R = rOhm;
+        p.LMh = lMh;
+        p.Fdbk = FdbkObs.IsChecked == true ? 1 : 0;
+        err = "";
+        return true;
+    }
+
+    private void ApplyUiParams(LoopParams p)
+    {
+        _syncingObs = true;
+        KpBox.Text = ParamFile.Fmt(p.Kp, "0.###");
+        KiBox.Text = ParamFile.Fmt(p.Ki, "0.###");
+        ObsBox.Text = ParamFile.Fmt(p.Obs, "0.###");
+        ObsHzBox.Text = Protocol.AlphaToHz(p.Obs).ToString("0", CultureInfo.InvariantCulture);
+        LpfBox.Text = ParamFile.Fmt(p.Lpf, "0.###");
+        FfBox.Text = ParamFile.Fmt(p.Ff, "0.#####");
+        VbusBox.Text = ParamFile.Fmt(Math.Clamp(p.Vbus, Protocol.VbusMin, Protocol.VbusMax), "0.###");
+        RcoilBox.Text = ParamFile.Fmt(p.R, "0.###");
+        LcoilBox.Text = ParamFile.Fmt(p.LMh, "0.###");
+        var obs = p.Fdbk != 0;
+        FdbkObs.IsChecked = obs;
+        FdbkAvg.IsChecked = !obs;
+        _syncingObs = false;
+    }
+
+    private void SendParams(LoopParams p)
+    {
+        var vbus = Math.Clamp(p.Vbus, Protocol.VbusMin, Protocol.VbusMax);
+        _link.Send(Protocol.SetLine(p.Kp, p.Ki, p.Obs, p.Lpf, p.Ff, vbus, p.R, p.LMh * 0.001, p.Fdbk));
+        AppendLog("发送 $S（导入/写入）");
     }
 
     private void Plant_Changed(object sender, RoutedEventArgs e)

@@ -66,10 +66,15 @@
 
 /* PI: ~3 kHz crossover @ 50 kHz (zero ~320 Hz, PM ~55°).
  * One gain set at every current. Analog RC (C32/C33) is ~14.5 kHz, above this loop.
- * PI follows î, not the raw 2-pt IFB. */
+ * Default feedback is observer î; host $S fdbk=0 uses raw 2-pt IFB. */
 #define VCM_KP                  0.23f
 #define VCM_KI                  460.0f
 #define VCM_I_INTEGRAL_LIM      0.30f
+
+/* PI feedback: 0 = ifb_avg (direct), 1 = ifb_hat (observer). Host key fdbk=. */
+#define VCM_PI_FDBK_AVG         0U
+#define VCM_PI_FDBK_OBS         1U
+#define VCM_PI_FDBK_DEFAULT     VCM_PI_FDBK_OBS
 
 /* Plant FF: bipolar Vcoil ≈ 2·m·Vbus. L-FF off while tuning PI.
  * Live/UART override uses the same 1st-order as analog RC (C32/C33 =
@@ -170,18 +175,18 @@
 
 /* Host frames: "$" ... "\n" @ 115200. Avoid 0x05 / 0xA0 (IAP).
  *   $I  identify     $P  telemetry     $D  dump params
- *   $S kp=230 ki=460000 obs=118 lpf=838 ff=37916 vbus=48000 r=3620 l=1188
- *      (kp/obs/lpf/vbus/r ×1000, ki ×1000, ff ×1e6, l = µH)
+ *   $S kp=230 ki=460000 obs=118 lpf=838 ff=37916 vbus=48000 r=3620 l=1188 fdbk=1
+ *      (kp/obs/lpf/vbus/r ×1000, ki ×1000, ff ×1e6, l = µH, fdbk 0=IFB 1=î)
  *   $R <mA>  IREF override (PI on)   $Z $A $F $B $T $C $G as lines too
  *   $W  save RAM params to FLASH Sector3   $L reload   $E factory erase
  *
  * Version in $I / $D: hw=<board> fw=<major>.<minor>.<patch>
  */
-#define VCM_HOST_PROTO          2U
+#define VCM_HOST_PROTO          3U
 #define VCM_HOST_LINE_MAX       128U
 #define VCM_HW_VERSION          1U   /* PCB / hardware revision */
 #define VCM_FW_VERSION_MAJOR    1U
 #define VCM_FW_VERSION_MINOR    0U
-#define VCM_FW_VERSION_PATCH    0U
+#define VCM_FW_VERSION_PATCH    1U
 
 #endif /* VCM_CONFIG_H */

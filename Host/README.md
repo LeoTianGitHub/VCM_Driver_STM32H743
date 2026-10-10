@@ -25,6 +25,8 @@ dotnet run
 
 参数：$S 写入 RAM；**$W 保存到 Flash Sector3（0x08060000）** 才掉电保持。上电自动加载。`$L` 再加载，`$E` 擦除并恢复编译默认。
 
+上位机可 **导出/导入** 环路参数为 `*.vcmparams`（JSON：kp/ki/fdbk/obs/lpf/ff/vbus/r/l_mh）。导入先填界面，可选立刻 `$S`；掉电仍需 `$W`。
+
 IAP 升级只擦 Sector 1–2，不会清掉参数。不要对 Sector3 做全片擦除。
 
 整数标定：`*_e3` = ×1000，`*_e6` = ×1e6，`*_ma` = 毫安。
@@ -39,8 +41,8 @@ IAP 升级只擦 Sector 1–2，不会清掉参数。不要对 Sector3 做全片
 |------|------|
 | `$I` | `ID VCM_H743 hw=1 fw=1.0.0 proto=2 pwm=50000 nv=ram` |
 | `$P` | `TL iref_ma=… ihat_ma=… iavg_ma=… …` |
-| `$D` | `PR hw=1 fw=1.0.0 proto=2 kp_e3=230 ki_e3=460000 obs_e3=118 …` |
-| `$S kp=… ki=… obs=… lpf=… ff=… vbus=… r=… l=…` | `OK` / `ERR`（vbus/r ×1000，l=µH） |
+| `$D` | `PR hw=1 fw=1.0.1 proto=3 … fdbk=1 …`（fdbk 0=IFB 1=î） |
+| `$S kp=… ki=… obs=… lpf=… ff=… vbus=… r=… l=… fdbk=0|1` | `OK` / `ERR`（vbus/r ×1000，l=µH） |
 | `$R 1500` | IREF 覆盖 1.500 A（PI 开） |
 | `$W` | `NV SAVE` / `NV ERR` 把 RAM 参数写入 Flash |
 | `$L` | `NV LOAD` / `NV EMPTY` 从 Flash 再加载 |
