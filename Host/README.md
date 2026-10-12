@@ -39,7 +39,7 @@ IAP 升级只擦 Sector 1–2，不会清掉参数。不要对 Sector3 做全片
 
 | 主机 | 从机 |
 |------|------|
-| `$I` | `ID VCM_H743 hw=1 fw=1.0.0 proto=2 pwm=50000 nv=ram` |
+| `$I` | `ID VCM_H743 hw=1 fw=1.2.0 proto=3 pwm=50000 …`（静音：fc≈700 Hz） |
 | `$P` | `TL iref_ma=… ihat_ma=… iavg_ma=… …` |
 | `$D` | `PR hw=1 fw=1.0.1 proto=3 … fdbk=1 …`（fdbk 0=IFB 1=î） |
 | `$S kp=… ki=… obs=… lpf=… ff=… vbus=… r=… l=… fdbk=0|1` | `OK` / `ERR`（vbus/r ×1000，l=µH） |

@@ -173,9 +173,9 @@
                                 <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
                             </Grid.RowDefinitions>
                             <Label Grid.Row="0" Content="Kp"/>
-                            <TextBox x:Name="KpBox" Grid.Row="0" Grid.Column="1" Margin="0,3" Text="0.23"/>
+                            <TextBox x:Name="KpBox" Grid.Row="0" Grid.Column="1" Margin="0,3" Text="0.055"/>
                             <Label Grid.Row="1" Content="Ki"/>
-                            <TextBox x:Name="KiBox" Grid.Row="1" Grid.Column="1" Margin="0,3" Text="460"/>
+                            <TextBox x:Name="KiBox" Grid.Row="1" Grid.Column="1" Margin="0,3" Text="110"/>
                             <Label Grid.Row="2" Content="PI 反馈" VerticalAlignment="Center"/>
                             <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Margin="0,3">
                                 <RadioButton x:Name="FdbkObs" Content="观测 î" IsChecked="True" Margin="0,0,12,0"
@@ -184,15 +184,15 @@
                                              ToolTip="fdbk=0：PiStep(iref, ifb_avg)，直跟采样"/>
                             </StackPanel>
                             <Label Grid.Row="3" Content="观测 α"/>
-                            <TextBox x:Name="ObsBox" Grid.Row="3" Grid.Column="1" Margin="0,3" Text="0.118"
+                            <TextBox x:Name="ObsBox" Grid.Row="3" Grid.Column="1" Margin="0,3" Text="0.084"
                                      LostFocus="ObsAlpha_Changed"/>
                             <Label Grid.Row="4" Content="观测 Hz"/>
-                            <TextBox x:Name="ObsHzBox" Grid.Row="4" Grid.Column="1" Margin="0,3" Text="1000"
+                            <TextBox x:Name="ObsHzBox" Grid.Row="4" Grid.Column="1" Margin="0,3" Text="700"
                                      LostFocus="ObsHz_Changed"/>
                             <Label Grid.Row="5" Content="IREF LPF α"/>
                             <TextBox x:Name="LpfBox" Grid.Row="5" Grid.Column="1" Margin="0,3" Text="0.838"/>
                             <Label Grid.Row="6" Content="R-FF m/A"/>
-                            <TextBox x:Name="FfBox" Grid.Row="6" Grid.Column="1" Margin="0,3" Text="0.0379"/>
+                            <TextBox x:Name="FfBox" Grid.Row="6" Grid.Column="1" Margin="0,3" Text="0.02792"/>
                             <Label Grid.Row="7" Content="Vbus (V)"/>
                             <TextBox x:Name="VbusBox" Grid.Row="7" Grid.Column="1" Margin="0,3" Text="48"
                                      LostFocus="Plant_Changed" ToolTip="24–48 V"/>

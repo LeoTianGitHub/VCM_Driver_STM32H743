@@ -2,8 +2,8 @@
  * @file    vcm_config.h
  * @brief   VCM current loop - PI + R/L FF, three-level PWM @ 50 kHz
  *
- * Competitor-style: short +/-Vbus pulses, rest of the period Vcoil=0 (LS freewheel).
- * PWM outputs stay enabled (no idle clamp).
+ * Quiet profile: fc≈700 Hz << structure fn≈1720 Hz. Competitor-style short
+ * +/-Vbus pulses, rest of period Vcoil=0. PWM stays enabled (no idle clamp).
  */
 #ifndef VCM_CONFIG_H
 #define VCM_CONFIG_H
@@ -64,11 +64,11 @@
 #define VCM_IREF_COUNTS_PER_A   (VCM_IREF_V_PER_A * VCM_ADC_COUNTS_PER_V)
 #define VCM_IREF_POLARITY       (-1.0f)
 
-/* PI: ~3 kHz crossover @ 50 kHz (zero ~320 Hz, PM ~55°).
- * One gain set at every current. Analog RC (C32/C33) is ~14.5 kHz, above this loop.
+/* Quiet PI @ 50 kHz: fc≈700 Hz (zero ~320 Hz), below structure fn≈1720 Hz.
+ * Was ~3 kHz (Kp0.23) and excited the mode. Host may raise carefully if quiet.
  * Default feedback is observer î; host $S fdbk=0 uses raw 2-pt IFB. */
-#define VCM_KP                  0.23f
-#define VCM_KI                  460.0f
+#define VCM_KP                  0.055f
+#define VCM_KI                  110.0f
 #define VCM_I_INTEGRAL_LIM      0.30f
 
 /* PI feedback: 0 = ifb_avg (direct), 1 = ifb_hat (observer). Host key fdbk=. */
@@ -84,10 +84,11 @@
 #define VCM_VBUS_V              48.0f
 #define VCM_VBUS_MIN_V          24.0f
 #define VCM_VBUS_MAX_V          48.0f
-#define VCM_FF_SCALE            1.0f
+/* Default R-FF tuned on bench (≈0.736× full ohmic). PlantSyncFf uses SCALE. */
+#define VCM_FF_MOD_PER_A        0.02792f
+#define VCM_FF_SCALE            (VCM_FF_MOD_PER_A * (2.0f * VCM_VBUS_V) / \
+                                 (VCM_COIL_R_OHM + VCM_IFB_RS_OHM))
 #define VCM_L_FF_SCALE          0.0f
-#define VCM_FF_MOD_PER_A        (VCM_FF_SCALE * (VCM_COIL_R_OHM + VCM_IFB_RS_OHM) / \
-                                 (2.0f * VCM_VBUS_V))
 #define VCM_L_FF_MOD_PER_A      (VCM_L_FF_SCALE * VCM_COIL_L_H / (2.0f * VCM_VBUS_V))
 #define VCM_IREF_OVR_LPF_A      0.838f   /* 1-exp(-2*pi*14500/50000); Live-tunable */
 #define VCM_L_FF_DIDT_MAX       4000.0f
@@ -95,15 +96,11 @@
 /*
  * Current observer on the 2-point duration-weighted IFB mean.
  *   î ← î + (Ts/L)(2·m·Vbus − R·î) + α(ifb_avg − î)
- * m is last applied (HRTIM preload = voltage that produced this IFB).
- *
- * 8 kHz (α=0.63) was a no-op for buzzing: each sample is 63% raw IFB, so PI
- * still chases CSA/dither aliases. HF current must come from the voltage
- * model; IFB only trims DC. fo=1 kHz.
- * Live: g_vcm.i_obs_a  0.061≈500 Hz  0.096≈800 Hz  0.118≈1 kHz  0.63≈8 kHz.
+ * Quiet: fo≈700 Hz (below fn), PI does not chase IFB aliases; HF from model.
+ * Live @ 50 kHz: α 0.061≈500 Hz  0.084≈700 Hz  0.118≈1 kHz.
  */
-#define VCM_I_OBS_HZ            1000.0f
-#define VCM_I_OBS_A             0.118f   /* 1-exp(-2*pi*1000/50000) */
+#define VCM_I_OBS_HZ            700.0f
+#define VCM_I_OBS_A             0.084f   /* 1-exp(-2*pi*700/50000) */
 #define VCM_I_OBS_R_OHM         (VCM_COIL_R_OHM + VCM_IFB_RS_OHM)
 #define VCM_I_OBS_TS_OVER_L     (VCM_PWM_TS_S / VCM_COIL_L_H)
 
@@ -175,7 +172,7 @@
 
 /* Host frames: "$" ... "\n" @ 115200. Avoid 0x05 / 0xA0 (IAP).
  *   $I  identify     $P  telemetry     $D  dump params
- *   $S kp=230 ki=460000 obs=118 lpf=838 ff=37916 vbus=48000 r=3620 l=1188 fdbk=1
+ *   $S kp=55 ki=110000 obs=84 lpf=838 ff=27920 vbus=48000 r=3620 l=1188 fdbk=1
  *      (kp/obs/lpf/vbus/r ×1000, ki ×1000, ff ×1e6, l = µH, fdbk 0=IFB 1=î)
  *   $R <mA>  IREF override (PI on)   $Z $A $F $B $T $C $G as lines too
  *   $W  save RAM params to FLASH Sector3   $L reload   $E factory erase
@@ -186,7 +183,7 @@
 #define VCM_HOST_LINE_MAX       128U
 #define VCM_HW_VERSION          1U   /* PCB / hardware revision */
 #define VCM_FW_VERSION_MAJOR    1U
-#define VCM_FW_VERSION_MINOR    0U
-#define VCM_FW_VERSION_PATCH    1U
+#define VCM_FW_VERSION_MINOR    2U
+#define VCM_FW_VERSION_PATCH    0U
 
 #endif /* VCM_CONFIG_H */

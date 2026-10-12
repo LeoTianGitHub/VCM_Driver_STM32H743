@@ -605,7 +605,9 @@ public partial class MainWindow : Window
         }
 
         vbus = Math.Clamp(vbus, Protocol.VbusMin, Protocol.VbusMax);
-        var ff = (rOhm + 0.02) / (2.0 * vbus);
+        /* Match firmware VCM_FF_SCALE (default R-FF 0.02792 @ R=3.62, Vbus=48). */
+        var ffFull = (rOhm + 0.02) / (2.0 * vbus);
+        var ff = ffFull * (0.02792 * 96.0 / 3.64);
         FfBox.Text = ff.ToString("0.#####", CultureInfo.InvariantCulture);
     }
 

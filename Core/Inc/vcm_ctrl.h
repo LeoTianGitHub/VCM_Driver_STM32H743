@@ -37,8 +37,8 @@ typedef struct
   float kp;
   float ki;
   float ff_mod_per_a;
-  float iref_lpf_a;    /* Live/F command LPF α; 0.838 ≈ analog 14.5 kHz */
-  float i_obs_a;       /* observer α; 0.118 ≈ 1 kHz @ 50 kHz */
+  float iref_lpf_a;    /* Live/F command LPF α; 0.838 ≈ analog 14.5 kHz @ 50 kHz */
+  float i_obs_a;       /* observer α; 0.084 ≈ 700 Hz @ 50 kHz (quiet) */
   float vbus_v;        /* plant Vbus; observer + R-FF */
   float coil_l_h;      /* plant L */
   float coil_r_ohm;    /* plant R (coil; Rs added in observer/FF) */
