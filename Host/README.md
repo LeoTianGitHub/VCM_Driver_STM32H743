@@ -23,7 +23,7 @@ dotnet run
 - IREF 覆盖、模拟给定、Force 0.5 A、Z 等宽 dither（关 PI）
 - 三电平 / 双极性、清故障、导出 CSV
 
-参数：$S 写入 RAM；**$W 保存到 Bank2 Sector3（0x08160000）** 才掉电保持。上电自动加载。`$L` 再加载，`$E` 擦除并恢复编译默认。
+参数：$S 写入 RAM；**$W 追加写入 Bank2 Sector3（0x08160000，512 槽，写满才擦除）** 才掉电保持。上电取最后一个 CRC 正确的槽。`$L` 再加载，`$E` 擦除并恢复编译默认。
 
 上位机可 **导出/导入** 环路参数为 `*.vcmparams`（JSON：kp/ki/fdbk/obs/lpf/ff/vbus/r/l_mh）。导入先填界面，可选立刻 `$S`；掉电仍需 `$W`。
 
@@ -39,7 +39,7 @@ IAP 升级只擦 Sector 1–2，不会清掉参数。不要对 Sector3 做全片
 
 | 主机 | 从机 |
 |------|------|
-| `$I` | `ID … fw=1.4.22 pwm=50000`（单段 PI，Kp/Ki 全程） |
+| `$I` | `ID … fw=1.4.23 pwm=50000`（单段 PI，Kp/Ki 全程） |
 | `$P` | `TL iref_ma=… ihat_ma=… iavg_ma=… …` |
 | `$D` | `PR hw=1 fw=1.4.6 proto=3 … fdbk=1 dt_ns=… mode=0|1`（fdbk 0=IFB 1=î，mode 0=双极性 1=三电平） |
 | `$S kp=… ki=… obs=… lpf=… ff=… vbus=… r=… l=… fdbk=0|1 dt=<ns>` | `OK` / `ERR`（vbus/r ×1000，l=µH，dt 为双极性死区补偿纳秒，0 关闭） |

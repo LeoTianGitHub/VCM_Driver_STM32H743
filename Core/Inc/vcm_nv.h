@@ -5,8 +5,8 @@
  *          0x08100000..0x0817FFFF. The application stays in Bank 1, so this
  *          sector can be erased while instructions and interrupts keep running.
  *
- * H743 programs Flash in 256-bit words (32 B). The NV image spans several words
- * so new float params can be appended without shrinking the record again.
+ * Each record is 256 B. The 128 KB sector holds 512 slots. A save appends
+ * into the next blank slot and erases the sector only when every slot is full.
  */
 #ifndef VCM_NV_H
 #define VCM_NV_H

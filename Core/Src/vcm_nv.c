@@ -4,10 +4,12 @@
  *
  * H743ZGT6 keeps Bank 1 at 0x08000000 and Bank 2 at 0x08100000. The
  * window 0x08080000..0x080FFFFF is not usable. Each HAL_FLASH_Program
- * writes one 256-bit flash word (32 B, 32 B aligned). The sector is
- * erased before programming so a second write cannot fault on ECC.
- * D-cache is invalidated only when it is enabled. The main loop sends
- * NV SAVE after this returns and then blinks the status LED.
+ * writes one 256-bit flash word (32 B, 32 B aligned). A save appends
+ * one 256 B record into the next blank slot. The 128 KB sector is
+ * erased only after all 512 slots are full, so the same 32 B word is
+ * never programmed twice. D-cache is invalidated only when it is
+ * enabled. The main loop sends NV SAVE after this returns and then
+ * blinks the status LED.
  *
  * Image size = VCM_NV_FLASH_WORDS x 32 B (currently 256 B). Unused tail is rsv[].
  */
@@ -42,6 +44,14 @@ typedef struct
 
 _Static_assert((sizeof(VCM_Nv_t) % 32U) == 0U,
                "VCM_Nv_t size must be a multiple of 32 bytes");
+
+/* 128 KB / 256 B = 512 append-only slots. Blank flash reads as 0xFFFFFFFF. */
+#define VCM_NV_SECTOR_BYTES   (128U * 1024U)
+#define VCM_NV_SLOT_COUNT     (VCM_NV_SECTOR_BYTES / VCM_NV_BYTES)
+#define VCM_NV_BLANK_MAGIC    0xFFFFFFFFUL
+
+_Static_assert((VCM_NV_SLOT_COUNT * VCM_NV_BYTES) == VCM_NV_SECTOR_BYTES,
+               "NV slots must fill Bank 2 Sector 3 exactly");
 
 /* v1–v4 on-disk layout (exactly 64 B / 2 flash words). */
 typedef struct
@@ -198,17 +208,66 @@ static int VCM_NvImageOk(uint32_t addr)
   return 0;
 }
 
+static uint32_t VCM_NvSlotAddr(uint32_t index)
+{
+  return VCM_NV_ADDR + (index * VCM_NV_BYTES);
+}
+
+static uint32_t VCM_NvSlotMagic(uint32_t addr)
+{
+  return *(const volatile uint32_t *)addr;
+}
+
+/* First slot whose magic is still the erased value. 0 = sector is full. */
+static uint32_t VCM_NvFindBlank(void)
+{
+  uint32_t i;
+
+  for (i = 0U; i < VCM_NV_SLOT_COUNT; i++)
+  {
+    uint32_t addr = VCM_NvSlotAddr(i);
+    if (VCM_NvSlotMagic(addr) == VCM_NV_BLANK_MAGIC)
+    {
+      return addr;
+    }
+  }
+  return 0U;
+}
+
+/* Last slot with our magic and a matching CRC. Stops at the first blank. */
+static uint32_t VCM_NvFindLatest(void)
+{
+  uint32_t i;
+  uint32_t latest = 0U;
+
+  for (i = 0U; i < VCM_NV_SLOT_COUNT; i++)
+  {
+    uint32_t addr = VCM_NvSlotAddr(i);
+    uint32_t magic = VCM_NvSlotMagic(addr);
+
+    if (magic == VCM_NV_BLANK_MAGIC)
+    {
+      break;
+    }
+    if ((magic == VCM_NV_MAGIC) && (VCM_NvImageOk(addr) != 0))
+    {
+      latest = addr;
+    }
+  }
+  return latest;
+}
+
 int VCM_NvIsValid(void)
 {
-  return VCM_NvImageOk(VCM_NV_ADDR);
+  return (VCM_NvFindLatest() != 0U) ? 1 : 0;
 }
 
 int VCM_NvLoad(void)
 {
-  uint32_t addr = VCM_NV_ADDR;
+  uint32_t addr = VCM_NvFindLatest();
   const VCM_Nv_t *nv;
 
-  if (VCM_NvImageOk(addr) == 0)
+  if (addr == 0U)
   {
     addr = VCM_NV_ADDR_LEGACY;
     if (VCM_NvImageOk(addr) == 0)
@@ -238,21 +297,25 @@ static int VCM_NvHalErr(void)
   return err;
 }
 
-static int VCM_NvEraseProgram(const VCM_Nv_t *nv, uint32_t do_program)
+static void VCM_NvInvalidate(uint32_t addr, int32_t len)
+{
+#if defined (__DCACHE_PRESENT) && (__DCACHE_PRESENT == 1U)
+  if ((SCB->CCR & SCB_CCR_DC_Msk) != 0U)
+  {
+    SCB_InvalidateDCache_by_Addr((void *)addr, len);
+  }
+#else
+  (void)addr;
+  (void)len;
+#endif
+}
+
+static int VCM_NvEraseSector(void)
 {
   FLASH_EraseInitTypeDef erase;
   uint32_t sector_error = 0U;
-  uint32_t offset;
-  uint8_t *src;
-  int err = 0;
-
-  if (HAL_FLASH_Unlock() != HAL_OK)
-  {
-    return VCM_NvHalErr();
-  }
 
   __HAL_FLASH_CLEAR_FLAG_BANK2(FLASH_FLAG_ALL_ERRORS_BANK2);
-
   erase.TypeErase = FLASH_TYPEERASE_SECTORS;
   erase.Banks = FLASH_BANK_2;
   erase.Sector = FLASH_SECTOR_3;
@@ -260,47 +323,63 @@ static int VCM_NvEraseProgram(const VCM_Nv_t *nv, uint32_t do_program)
   erase.VoltageRange = FLASH_VOLTAGE_RANGE_3;
   if (HAL_FLASHEx_Erase(&erase, &sector_error) != HAL_OK)
   {
-    err = -3;
+    return -3;
   }
+  VCM_NvInvalidate(VCM_NV_ADDR, (int32_t)VCM_NV_SECTOR_BYTES);
+  return 0;
+}
 
-  /* Third argument is the RAM address of the 32-byte source, not the data. */
-  if ((err == 0) && (do_program != 0U) && (nv != 0))
+/* Programs one blank slot. The third HAL argument is the RAM address. */
+static int VCM_NvProgramSlot(uint32_t addr, const VCM_Nv_t *nv)
+{
+  const uint8_t *src = (const uint8_t *)nv;
+  uint32_t offset;
+
+  __HAL_FLASH_CLEAR_FLAG_BANK2(FLASH_FLAG_ALL_ERRORS_BANK2);
+  for (offset = 0U; offset < VCM_NV_BYTES; offset += 32U)
   {
-    src = (uint8_t *)nv;
-    for (offset = 0U; offset < VCM_NV_BYTES; offset += 32U)
+    if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_FLASHWORD,
+                          addr + offset,
+                          (uint32_t)(src + offset)) != HAL_OK)
     {
-      if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_FLASHWORD,
-                            VCM_NV_ADDR + offset,
-                            (uint32_t)(src + offset)) != HAL_OK)
-      {
-        err = -3;
-        break;
-      }
+      return -3;
     }
   }
-
-  (void)HAL_FLASH_Lock();
-  return err;
+  VCM_NvInvalidate(addr, (int32_t)VCM_NV_BYTES);
+  return 0;
 }
 
 int VCM_NvSave(void)
 {
   VCM_Nv_t nv __attribute__((aligned(32)));
+  uint32_t slot;
   int err;
 
   VCM_NvCapture(&nv);
-  err = VCM_NvEraseProgram(&nv, 1U);
-#if defined (__DCACHE_PRESENT) && (__DCACHE_PRESENT == 1U)
-  if ((SCB->CCR & SCB_CCR_DC_Msk) != 0U)
+  slot = VCM_NvFindBlank();
+  if (HAL_FLASH_Unlock() != HAL_OK)
   {
-    SCB_InvalidateDCache_by_Addr((void *)VCM_NV_ADDR, (int32_t)sizeof(nv));
+    return VCM_NvHalErr();
   }
-#endif
+  if (slot == 0U)
+  {
+    err = VCM_NvEraseSector();
+    slot = VCM_NV_ADDR;
+  }
+  else
+  {
+    err = 0;
+  }
+  if (err == 0)
+  {
+    err = VCM_NvProgramSlot(slot, &nv);
+  }
+  (void)HAL_FLASH_Lock();
   if (err != 0)
   {
     return err;
   }
-  if (VCM_NvIsValid() == 0)
+  if (VCM_NvImageOk(slot) == 0)
   {
     return -5;
   }
@@ -311,7 +390,12 @@ int VCM_NvFactory(void)
 {
   int err;
 
-  err = VCM_NvEraseProgram((const VCM_Nv_t *)0, 0U);
+  if (HAL_FLASH_Unlock() != HAL_OK)
+  {
+    return VCM_NvHalErr();
+  }
+  err = VCM_NvEraseSector();
+  (void)HAL_FLASH_Lock();
 
   g_vcm.kp = VCM_KP;
   g_vcm.ki = VCM_KI;

@@ -197,6 +197,6 @@
 #define VCM_HW_VERSION          1U   /* PCB / hardware revision */
 #define VCM_FW_VERSION_MAJOR    1U
 #define VCM_FW_VERSION_MINOR    4U
-#define VCM_FW_VERSION_PATCH    22U
+#define VCM_FW_VERSION_PATCH    23U
 
 #endif /* VCM_CONFIG_H */
