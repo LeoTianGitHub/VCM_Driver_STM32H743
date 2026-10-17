@@ -40,6 +40,9 @@ internal sealed class LoopParams
     [JsonPropertyName("l_mh")]
     public double LMh { get; set; }
 
+    [JsonPropertyName("dt_ns")]
+    public int DtNs { get; set; } = 200;
+
     [JsonPropertyName("note")]
     public string? Note { get; set; }
 }

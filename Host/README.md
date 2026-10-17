@@ -17,13 +17,13 @@ dotnet run
 
 ## 功能
 
-- 15 Hz 遥测：IREF、观测电流 î、两点 IFB、m、状态、故障、ADC
+- 15 Hz 遥测：IREF、观测电流 î、单点 IFB（周期结束前 1.5 µs）、m、状态、故障、ADC
 - 约 8 s 波形：IREF / î / IFB
 - 写 RAM 参数：Kp、Ki、观测器、IREF LPF、R-FF、**Vbus / R / L**
 - IREF 覆盖、模拟给定、Force 0.5 A、Z 等宽 dither（关 PI）
 - 三电平 / 双极性、清故障、导出 CSV
 
-参数：$S 写入 RAM；**$W 保存到 Flash Sector3（0x08060000）** 才掉电保持。上电自动加载。`$L` 再加载，`$E` 擦除并恢复编译默认。
+参数：$S 写入 RAM；**$W 保存到 Bank2 Sector3（0x08160000）** 才掉电保持。上电自动加载。`$L` 再加载，`$E` 擦除并恢复编译默认。
 
 上位机可 **导出/导入** 环路参数为 `*.vcmparams`（JSON：kp/ki/fdbk/obs/lpf/ff/vbus/r/l_mh）。导入先填界面，可选立刻 `$S`；掉电仍需 `$W`。
 
@@ -39,11 +39,12 @@ IAP 升级只擦 Sector 1–2，不会清掉参数。不要对 Sector3 做全片
 
 | 主机 | 从机 |
 |------|------|
-| `$I` | `ID VCM_H743 hw=1 fw=1.2.0 proto=3 pwm=50000 …`（静音：fc≈700 Hz） |
+| `$I` | `ID … fw=1.4.22 pwm=50000`（单段 PI，Kp/Ki 全程） |
 | `$P` | `TL iref_ma=… ihat_ma=… iavg_ma=… …` |
-| `$D` | `PR hw=1 fw=1.0.1 proto=3 … fdbk=1 …`（fdbk 0=IFB 1=î） |
-| `$S kp=… ki=… obs=… lpf=… ff=… vbus=… r=… l=… fdbk=0|1` | `OK` / `ERR`（vbus/r ×1000，l=µH） |
+| `$D` | `PR hw=1 fw=1.4.6 proto=3 … fdbk=1 dt_ns=… mode=0|1`（fdbk 0=IFB 1=î，mode 0=双极性 1=三电平） |
+| `$S kp=… ki=… obs=… lpf=… ff=… vbus=… r=… l=… fdbk=0|1 dt=<ns>` | `OK` / `ERR`（vbus/r ×1000，l=µH，dt 为双极性死区补偿纳秒，0 关闭） |
 | `$R 1500` | IREF 覆盖 1.500 A（PI 开） |
+| `$K` | `DT BUSY`，结束后 `DT ns=… pos=… neg=…`。机构停住、驱动使能。失败为 `DT ERR run/abort/fit` |
 | `$W` | `NV SAVE` / `NV ERR` 把 RAM 参数写入 Flash |
 | `$L` | `NV LOAD` / `NV EMPTY` 从 Flash 再加载 |
 | `$E` | `NV FACTORY` 擦除并恢复编译默认 |

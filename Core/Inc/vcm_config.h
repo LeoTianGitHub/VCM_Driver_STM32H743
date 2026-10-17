@@ -23,6 +23,19 @@
 #define VCM_DT_RISING           0U
 #define VCM_DT_FALLING          0U
 
+/* Gate-driver blanking compensated in the bipolar leg difference only.
+ * HRTIM dead-time registers stay 0 (they would stack on top of this).
+ * $S dt=<ns>, 0 disables. Hold the last current sign below HOLD. */
+#define VCM_DRV_DT_NS              200U
+#define VCM_DRV_DT_NS_MAX          1000U
+#define VCM_DRV_DT_HOLD_A          0.080f
+/* $K: bipolar, t_d forced to 0, PI at ±0.2 A then ±0.6 A. Axis must be still. */
+#define VCM_DT_CAL_I1_A            0.20f
+#define VCM_DT_CAL_I2_A            0.60f
+#define VCM_DT_CAL_SETTLE          1000U   /* 20 ms @ 50 kHz */
+#define VCM_DT_CAL_AVG             2500U   /* valid IFB samples, 50 ms */
+#define VCM_DT_CAL_AVG_MAX         5000U   /* abort if samples do not arrive */
+
 #define VCM_MOD_MAX             0.48f
 
 /* 0 = bipolar 0.5+/-m; 1 = three-level low-side freewheel (D=2*|m|) */
@@ -64,11 +77,10 @@
 #define VCM_IREF_COUNTS_PER_A   (VCM_IREF_V_PER_A * VCM_ADC_COUNTS_PER_V)
 #define VCM_IREF_POLARITY       (-1.0f)
 
-/* Quiet PI @ 50 kHz: fc≈700 Hz (zero ~320 Hz), below structure fn≈1720 Hz.
- * Was ~3 kHz (Kp0.23) and excited the mode. Host may raise carefully if quiet.
+/* Single-zone PI @ 50 kHz: fc≈1.5 kHz (zero ~320 Hz).
  * Default feedback is observer î; host $S fdbk=0 uses raw 2-pt IFB. */
-#define VCM_KP                  0.055f
-#define VCM_KI                  110.0f
+#define VCM_KP                  0.12f
+#define VCM_KI                  240.0f
 #define VCM_I_INTEGRAL_LIM      0.30f
 
 /* PI feedback: 0 = ifb_avg (direct), 1 = ifb_hat (observer). Host key fdbk=. */
@@ -94,7 +106,7 @@
 #define VCM_L_FF_DIDT_MAX       4000.0f
 
 /*
- * Current observer on the 2-point duration-weighted IFB mean.
+ * Current observer on the fixed-phase single IFB sample.
  *   î ← î + (Ts/L)(2·m·Vbus − R·î) + α(ifb_avg − î)
  * Quiet: fo≈700 Hz (below fn), PI does not chase IFB aliases; HF from model.
  * Live @ 50 kHz: α 0.061≈500 Hz  0.084≈700 Hz  0.118≈1 kHz.
@@ -114,7 +126,7 @@
 #define VCM_IDLE_ENTER_DEB         5000U  /* 100 ms @ 50 kHz */
 
 /* No error/IREF deadband: PI stays closed through zero (small-current linear).
- * Quiet idle is UART 'Z' only. 2-sample mean feeds the observer, PI follows î. */
+ * Quiet idle is UART 'Z' only. One fixed-phase IFB sample feeds the observer. */
 
 /* 0: enable goes straight to RUN (no IFB/IREF offset cal, no 2 ms open loop).
  * 1: measure offsets for VCM_IFB_CAL_SAMPLES with m=0 before closing PI. */
@@ -122,21 +134,21 @@
 #define VCM_IFB_CAL_SAMPLES        100U   /* ~2 ms @ 50 kHz; used only if ENABLE_CAL */
 #define VCM_IREF_OFFSET_MAX_A      0.050f
 
-#define VCM_ADC_TRIG_EDGE_MARGIN   480U   /* 1 us: coast S&H away from PWM edges */
-#define VCM_ADC_ON_EDGE_MARGIN     48U    /* 100 ns: ON-pulse S&H off the switching edge */
-#define VCM_ADC_CONV_GUARD         720U   /* ~1.5 us: sample + conv before next trig */
+#define VCM_ADC_CONV_GUARD         720U   /* ~1.5 us: sample + conversion */
 #define VCM_ADC_KERNEL_HZ          24000000UL  /* PLL2P 96 MHz / ASYNC_DIV4 */
 #define VCM_ADC_SMP_CYCLES         16.5f       /* CubeMX 16.5; S&H at end of this */
 #define VCM_ADC_SMP_DELAY          ((uint16_t)(VCM_ADC_SMP_CYCLES * \
                                  ((float)VCM_HRTIM_CLOCK_HZ / (float)VCM_ADC_KERNEL_HZ) + 0.5f)) /* 330 */
-#define VCM_ADC_MIN_COAST          ((uint16_t)(2U * VCM_ADC_TRIG_EDGE_MARGIN + \
-                                 VCM_ADC_SMP_DELAY)) /* ~2.7 us quiet window */
-#define VCM_ADC_N                  2U     /* + and − slots; duration-weighted → observer */
+/* Both modes: S&H ends END_NS before the next period edge. Trigger is
+ * earlier by SMP_DELAY. 1.5 µs @ 50 kHz = 720 counts. Phase ignores edges.
+ * Tri-level stays in the second coast while |m| < 0.375.
+ * Bipolar stays in the both-LS coast while |m| < 0.425. */
+#define VCM_ADC_END_NS             1500U
+#define VCM_ADC_END_CNT            ((uint16_t)(((uint32_t)VCM_ADC_END_NS * \
+                                   (VCM_HRTIM_CLOCK_HZ / 1000000UL)) / 1000UL)) /* 720 */
+#define VCM_ADC_N                  1U     /* one IFB conversion per PWM period */
 
-/* ADCTRG1 = TA CMP2 | TB CMP3. DMA length 2.
- * Prefer coast midpoint. If coast < MIN_COAST, sample inside the MOS ON pulse
- * (series CSA is valid while conducting) with the whole S&H window inset from
- * both PWM edges. Trigger is advanced by SMP_DELAY so S&H ends on the hold. */
+/* ADCTRG1 = Timer A CMP2 only. DMA length 1. */
 
 /* Gain-cal: UART force current (clamp meter) and rolling mean window */
 #define VCM_CAL_FORCE_A            0.50f
@@ -172,10 +184,11 @@
 
 /* Host frames: "$" ... "\n" @ 115200. Avoid 0x05 / 0xA0 (IAP).
  *   $I  identify     $P  telemetry     $D  dump params
- *   $S kp=55 ki=110000 obs=84 lpf=838 ff=27920 vbus=48000 r=3620 l=1188 fdbk=1
- *      (kp/obs/lpf/vbus/r ×1000, ki ×1000, ff ×1e6, l = µH, fdbk 0=IFB 1=î)
+ *   $S kp=120 ki=240000 obs=84 lpf=838 ff=27920 vbus=48000 r=3620 l=1188 fdbk=1 dt=200
+ *      (kp/obs/lpf/vbus/r ×1000, ki ×1000, ff ×1e6, l = µH, fdbk 0=IFB 1=î, dt = ns)
  *   $R <mA>  IREF override (PI on)   $Z $A $F $B $T $C $G as lines too
- *   $W  save RAM params to FLASH Sector3   $L reload   $E factory erase
+ *   $K  measure bipolar gate-driver t_d and store it in RAM
+ *   $W  save RAM params to Bank2 Sector3   $L reload   $E factory erase
  *
  * Version in $I / $D: hw=<board> fw=<major>.<minor>.<patch>
  */
@@ -183,7 +196,7 @@
 #define VCM_HOST_LINE_MAX       128U
 #define VCM_HW_VERSION          1U   /* PCB / hardware revision */
 #define VCM_FW_VERSION_MAJOR    1U
-#define VCM_FW_VERSION_MINOR    2U
-#define VCM_FW_VERSION_PATCH    0U
+#define VCM_FW_VERSION_MINOR    4U
+#define VCM_FW_VERSION_PATCH    22U
 
 #endif /* VCM_CONFIG_H */

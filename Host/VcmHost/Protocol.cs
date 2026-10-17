@@ -63,7 +63,7 @@ internal static class Protocol
 
     /* fdbk: 0 = PI on ifb_avg, 1 = PI on observer î */
     public static string SetLine(double kp, double ki, double obs, double lpf, double ff,
-        double vbus, double rOhm, double lHenry, int fdbk)
+        double vbus, double rOhm, double lHenry, int fdbk, int dtNs)
     {
         var kpE3 = (int)Math.Round(kp * 1000.0);
         var kiE3 = (int)Math.Round(ki * 1000.0);
@@ -74,7 +74,8 @@ internal static class Protocol
         var rE3 = (int)Math.Round(rOhm * 1000.0);
         var lE6 = (int)Math.Round(lHenry * 1_000_000.0);
         var fb = fdbk != 0 ? 1 : 0;
-        return $"$S kp={kpE3} ki={kiE3} obs={obsE3} lpf={lpfE3} ff={ffE6} vbus={vbusE3} r={rE3} l={lE6} fdbk={fb}\n";
+        var dt = Math.Clamp(dtNs, 0, 1000);
+        return $"$S kp={kpE3} ki={kiE3} obs={obsE3} lpf={lpfE3} ff={ffE6} vbus={vbusE3} r={rE3} l={lE6} fdbk={fb} dt={dt}\n";
     }
 
     public static string IrefLine(double amps)

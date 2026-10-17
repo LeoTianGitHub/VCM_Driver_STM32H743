@@ -14,7 +14,7 @@ Do not hand-edit `.ioc` with partial keys (e.g. `DMA_CIRCULAR` without DMA reque
 ## Required ADC/DMA contract (must match code)
 
 1. **System → DMA**
-   - ADC1 → DMA1 Stream0, Circular, Periph/Mem Halfword, MemInc **Enable** (2 samples/period)
+   - ADC1 → DMA1 Stream0, Circular, Periph/Mem Halfword, MemInc **Disable** (1 sample/period, fixed phase)
    - ADC2 → DMA1 Stream1, Circular, Periph/Mem Halfword, MemInc **Disable**
 2. **ADC1 / ADC2** (after DMA exists)
    - Diff channels: ADC1 IN16 (PA0/PA1), ADC2 IN3 (PA6/PA7)
@@ -23,7 +23,7 @@ Do not hand-edit `.ioc` with partial keys (e.g. `DMA_CIRCULAR` without DMA reque
    - Conversion Data Management: **DMA Circular**
    - Overrun: Overwrite
    - Sampling: 16.5 cycles
-3. HRTIM ADCTRG1 in `VCM_HRTIM_InitTimers()`: TimerA CMP2 **or** TimerB CMP3
+3. HRTIM ADCTRG1 in `VCM_HRTIM_InitTimers()`: TimerA CMP2 only (both modes hold 1.5 µs before period end, set in `VCM_HRTIM_SetAdcPhase()`)
 
 ## After Generate Code
 

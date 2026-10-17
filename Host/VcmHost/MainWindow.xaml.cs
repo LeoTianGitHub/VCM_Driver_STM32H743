@@ -22,6 +22,7 @@ public partial class MainWindow : Window
     private readonly object _logGate = new();
     private bool _syncingIref;
     private bool _syncingObs;
+    private bool _syncingMode;
     private DateTime _lastPoll = DateTime.MinValue;
     private bool _awaitingTl;
     private DateTime _nvQuietUntil = DateTime.MinValue;
@@ -172,6 +173,14 @@ public partial class MainWindow : Window
             _awaitingTl = false;
             ApplyTelemetry(Protocol.ParseFields(line));
         }
+        else if (line.StartsWith("DT ns=", StringComparison.Ordinal))
+        {
+            var dt = Protocol.ParseFields(line);
+            if (dt.ContainsKey("ns"))
+            {
+                DtBox.Text = Protocol.Int(dt, "ns").ToString(CultureInfo.InvariantCulture);
+            }
+        }
         else if (line.StartsWith("PR ", StringComparison.Ordinal) ||
                  line.StartsWith("ID ", StringComparison.Ordinal))
         {
@@ -194,7 +203,7 @@ public partial class MainWindow : Window
             }
             else if (line.StartsWith("NV BUSY", StringComparison.Ordinal))
             {
-                _nvQuietUntil = DateTime.UtcNow.AddSeconds(8);
+                _nvQuietUntil = DateTime.UtcNow.AddSeconds(40);
             }
         }
         else if (line.StartsWith("ERR", StringComparison.Ordinal) && _nvPending)
@@ -264,6 +273,16 @@ public partial class MainWindow : Window
             FdbkAvg.IsChecked = !obs;
         }
 
+        if (m.ContainsKey("dt_ns"))
+        {
+            DtBox.Text = Protocol.Int(m, "dt_ns").ToString(CultureInfo.InvariantCulture);
+        }
+
+        if (m.ContainsKey("mode"))
+        {
+            ShowPwmMode(Protocol.Int(m, "mode") != 0);
+        }
+
         if (m.ContainsKey("nv"))
         {
             NvText.Text = Protocol.Int(m, "nv") != 0
@@ -308,9 +327,10 @@ public partial class MainWindow : Window
         SampText.Text =
             $"ip = {FmtA(ip)} A\nim = {FmtA(im)} A\nADC IFB = {Protocol.Int(m, "adc_ifb")}\nADC IREF = {Protocol.Int(m, "adc_iref")}\nticks = {Protocol.Int(m, "ticks")}";
 
-        var mode = Protocol.Int(m, "mode");
-        ModeTri.IsChecked = mode != 0;
-        ModeBi.IsChecked = mode == 0;
+        if (m.ContainsKey("mode"))
+        {
+            ShowPwmMode(Protocol.Int(m, "mode") != 0);
+        }
 
         Push(_iref, iref);
         Push(_hat, hat);
@@ -427,14 +447,46 @@ public partial class MainWindow : Window
     private void Force_Click(object sender, RoutedEventArgs e) => _link.Send("$F\n");
     private void Zero_Click(object sender, RoutedEventArgs e) => _link.Send("$Z\n");
     private void ClearFault_Click(object sender, RoutedEventArgs e) => _link.Send("$C\n");
-    private void ModeTri_Click(object sender, RoutedEventArgs e) => _link.Send("$T\n");
-    private void ModeBi_Click(object sender, RoutedEventArgs e) => _link.Send("$B\n");
+
+    private void ShowPwmMode(bool tri)
+    {
+        _syncingMode = true;
+        if (tri)
+        {
+            ModeTri.IsChecked = true;
+        }
+        else
+        {
+            ModeBi.IsChecked = true;
+        }
+        _syncingMode = false;
+    }
+
+    private void ModeTri_Click(object sender, RoutedEventArgs e)
+    {
+        if (_syncingMode)
+        {
+            return;
+        }
+
+        _link.Send("$T\n");
+    }
+
+    private void ModeBi_Click(object sender, RoutedEventArgs e)
+    {
+        if (_syncingMode)
+        {
+            return;
+        }
+
+        _link.Send("$B\n");
+    }
     private void ReadParams_Click(object sender, RoutedEventArgs e) => _link.Send("$D\n");
 
     private void SaveNv_Click(object sender, RoutedEventArgs e)
     {
         _nvPending = true;
-        _nvQuietUntil = DateTime.UtcNow.AddSeconds(15);
+        _nvQuietUntil = DateTime.UtcNow.AddSeconds(40);
         NvText.Text = "Flash：正在保存…";
         AppendLog("保存到 Flash");
         _link.SendExclusive("$W\n");
@@ -451,7 +503,7 @@ public partial class MainWindow : Window
         }
 
         _nvPending = true;
-        _nvQuietUntil = DateTime.UtcNow.AddSeconds(15);
+        _nvQuietUntil = DateTime.UtcNow.AddSeconds(40);
         NvText.Text = "Flash：正在恢复出厂…";
         AppendLog("恢复出厂");
         _link.SendExclusive("$E\n");
@@ -553,7 +605,8 @@ public partial class MainWindow : Window
             !TryParseBox(FfBox.Text, out var ff) ||
             !TryParseBox(VbusBox.Text, out var vbus) ||
             !TryParseBox(RcoilBox.Text, out var rOhm) ||
-            !TryParseBox(LcoilBox.Text, out var lMh))
+            !TryParseBox(LcoilBox.Text, out var lMh) ||
+            !TryParseBox(DtBox.Text, out var dtNs))
         {
             return false;
         }
@@ -567,6 +620,7 @@ public partial class MainWindow : Window
         p.R = rOhm;
         p.LMh = lMh;
         p.Fdbk = FdbkObs.IsChecked == true ? 1 : 0;
+        p.DtNs = (int)Math.Clamp(Math.Round(dtNs), 0, 1000);
         err = "";
         return true;
     }
@@ -583,16 +637,23 @@ public partial class MainWindow : Window
         VbusBox.Text = ParamFile.Fmt(Math.Clamp(p.Vbus, Protocol.VbusMin, Protocol.VbusMax), "0.###");
         RcoilBox.Text = ParamFile.Fmt(p.R, "0.###");
         LcoilBox.Text = ParamFile.Fmt(p.LMh, "0.###");
+        DtBox.Text = Math.Clamp(p.DtNs, 0, 1000).ToString(CultureInfo.InvariantCulture);
         var obs = p.Fdbk != 0;
         FdbkObs.IsChecked = obs;
         FdbkAvg.IsChecked = !obs;
         _syncingObs = false;
     }
 
+    private void MeasureDt_Click(object sender, RoutedEventArgs e)
+    {
+        _link.Send("$K\n");
+        AppendLog("测定 t_d：机构请保持静止");
+    }
+
     private void SendParams(LoopParams p)
     {
         var vbus = Math.Clamp(p.Vbus, Protocol.VbusMin, Protocol.VbusMax);
-        _link.Send(Protocol.SetLine(p.Kp, p.Ki, p.Obs, p.Lpf, p.Ff, vbus, p.R, p.LMh * 0.001, p.Fdbk));
+        _link.Send(Protocol.SetLine(p.Kp, p.Ki, p.Obs, p.Lpf, p.Ff, vbus, p.R, p.LMh * 0.001, p.Fdbk, p.DtNs));
         AppendLog("写入参数");
     }
 

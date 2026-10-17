@@ -2073,9 +2073,11 @@ typedef struct
 #define PERIPH_BASE               (0x40000000UL) /*!< Base address of : AHB/APB Peripherals                                                   */
 #define QSPI_BASE                 (0x90000000UL) /*!< Base address of : QSPI memories  accessible over AXI                                    */
 
-#define FLASH_BANK1_BASE          (0x08000000UL) /*!< Base address of : (up to 1 MB) Flash Bank1 accessible over AXI                          */
-#define FLASH_BANK2_BASE          (0x08100000UL) /*!< Base address of : (up to 1 MB) Flash Bank2 accessible over AXI                          */
-#define FLASH_END                 (0x081FFFFFUL) /*!< FLASH end address                                                                       */
+#define FLASH_BANK1_BASE          (0x08000000UL) /*!< Bank1 512 KB: 0x08000000..0x0807FFFF, Sector 0..3                         */
+/* H743ZGT6 (1 MB): 0x08080000..0x080FFFFF is not a valid flash window.
+ * Bank2 is 0x08100000..0x0817FFFF, Sector 0..3, 128 KB each. */
+#define FLASH_BANK2_BASE          (0x08100000UL) /*!< Bank2 512 KB on STM32H743ZGT6                                          */
+#define FLASH_END                 (0x0817FFFFUL) /*!< Last byte of Bank2 Sector 3                                            */
 
 /* Legacy define */
 #define FLASH_BASE                FLASH_BANK1_BASE

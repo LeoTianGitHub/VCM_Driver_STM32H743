@@ -26,7 +26,7 @@ typedef struct
   float ifb_avg_a;     /* 2-pt duration-weighted mean (scope / OCP / UART G) */
   float ifb_hat_a;     /* observer current → PI */
   float ifb_filt_a;    /* Live: alias of ifb_hat_a */
-  float ifb_ip_a;      /* +coast sample */
+  float ifb_ip_a;      /* fixed-phase IFB (same instant as im) */
   float ifb_im_a;      /* −coast sample */
   float ifb_raw_a;
   float ifb_offset_a;
@@ -54,14 +54,14 @@ typedef struct
   uint16_t ifb_cal_count;
   VCM_State_t state;
   uint8_t adc_active_valid;
-  uint8_t adc_pair_ok;        /* 1 = this period DMA delivered both I+ and I- */
+  uint8_t adc_pair_ok;        /* 1 = this period's single IFB DMA sample is in */
   uint8_t pwm_armed;
   uint8_t calib_valid;
   uint8_t iref_override_en;
   uint8_t iref_hold_en;       /* 1 = UART 'Z': PI off, equal dither */
-  uint8_t pi_steady;          /* unused, always 0: no ΔIREF hold */
   uint8_t pi_fdbk;            /* VCM_PI_FDBK_*: 0=ifb_avg 1=ifb_hat */
   uint8_t pwm_mode;           /* VCM_PWM_MODE_*; Live Expr / UART B|T */
+  uint16_t drv_dt_ns;         /* bipolar gate-driver compensation; 0 = off */
   uint32_t isr_ticks;
   uint32_t start_count;
   uint32_t stop_count;
