@@ -1,0 +1,14 @@
+{
+  "format": "vcm-host-params",
+  "version": 1,
+  "kp": 0.18,
+  "ki": 260,
+  "fdbk": 1,
+  "obs": 0.118,
+  "lpf": 0.838,
+  "ff": 0,
+  "vbus": 48,
+  "r": 3.62,
+  "l_mh": 1.188,
+  "note": "Exported 2026-10-10 15:37:37"
+}
