@@ -52,7 +52,8 @@ MEMORY
   RAM_D1 (xrw)    : ORIGIN = 0x24000000,   LENGTH = 320K
   /* IAP layout: Boot 0x08000000..0x0801FFFF, App @ 0x08020000.
    * Keep VECT_TAB_OFFSET=0x20000 in system_stm32h7xx.c in sync.
-   * NV params stay in Sector 3 at 0x08060000 (not erased by IAP). */
+   * NV params stay in Bank 2 Sector 3 at 0x08160000 (not erased by IAP).
+   * 0x08080000..0x080FFFFF is not flash on H743ZGT6. */
   ROM    (rx)    : ORIGIN = 0x08020000,   LENGTH = 256K
 }
 

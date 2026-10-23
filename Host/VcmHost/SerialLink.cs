@@ -10,6 +10,7 @@ internal sealed class SerialLink : IDisposable
     private readonly ConcurrentQueue<string> _tx = new();
     private readonly StringBuilder _acc = new();
     private SerialPort? _port;
+    public int Baud { get; private set; } = 115200;
     private CancellationTokenSource? _cts;
     private Task? _io;
 
@@ -49,6 +50,7 @@ internal sealed class SerialLink : IDisposable
             WriteTimeout = 500,
         };
         p.Open();
+        Baud = baud;
         lock (_gate)
         {
             _port = p;

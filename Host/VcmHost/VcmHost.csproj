@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
-    <ApplicationTitle>VCM 电流环调试</ApplicationTitle>
+    <ApplicationTitle>VCM电流环调试</ApplicationTitle>
     <Product>VCM Host</Product>
     <Description>STM32H743 VCM current-loop debug host</Description>
     <ImplicitUsings>enable</ImplicitUsings>

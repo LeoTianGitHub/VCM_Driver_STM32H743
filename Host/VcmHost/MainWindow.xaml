@@ -1,12 +1,14 @@
-﻿<Window x:Class="VcmHost.MainWindow"
+<Window x:Class="VcmHost.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="VCM 电流环调试 — STM32H743"
+        Title="VCM电流环调试"
         Width="1320" Height="860"
-        MinWidth="1100" MinHeight="700"
+        MinWidth="960" MinHeight="560"
         Background="{StaticResource BgBrush}"
         Loaded="Window_Loaded"
-        Closing="Window_Closing">
+        Closing="Window_Closing"
+        PreviewKeyDown="Window_PreviewKeyDown">
+    <Grid>
     <DockPanel Margin="12">
         <Border DockPanel.Dock="Top" Background="{StaticResource CardBrush}"
                 BorderBrush="{StaticResource LineBrush}" BorderThickness="1"
@@ -21,8 +23,18 @@
                     <ComboBox x:Name="PortBox" Width="130"/>
                     <Button Content="刷新" Click="RefreshPorts_Click"/>
                     <Button x:Name="ConnectBtn" Content="连接" Style="{StaticResource AccentBtn}" Click="Connect_Click"/>
-                    <Label Content="115200 8N1" Foreground="{StaticResource MuteBrush}"/>
-                    <CheckBox x:Name="PollBox" Content="轮询" IsChecked="True" Margin="16,0,8,0"/>
+                    <ComboBox x:Name="BaudBox" Width="110" SelectedIndex="0"
+                              SelectionChanged="BaudBox_Changed"
+                              ToolTip="默认 115200。改波特率会让固件一起切换。列表最高 2000000。升级引导程序仍是 115200。">
+                        <ComboBoxItem Content="115200"/>
+                        <ComboBoxItem Content="230400"/>
+                        <ComboBoxItem Content="460800"/>
+                        <ComboBoxItem Content="921600"/>
+                        <ComboBoxItem Content="1500000"/>
+                        <ComboBoxItem Content="2000000"/>
+                    </ComboBox>
+                    <TextBlock Text="8N1" VerticalAlignment="Center" Margin="4,0,8,0" Foreground="{StaticResource MuteBrush}"/>
+                    <CheckBox x:Name="PollBox" Content="轮询" IsChecked="False" Margin="16,0,8,0"/>
                     <Label Content="Hz"/>
                     <TextBox x:Name="PollHzBox" Width="44" Text="15"/>
                 </StackPanel>
@@ -37,12 +49,12 @@
 
         <Grid>
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="2.2*"/>
-                <ColumnDefinition Width="12"/>
-                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*" MinWidth="480"/>
+                <ColumnDefinition Width="6"/>
+                <ColumnDefinition Width="380" MinWidth="260" MaxWidth="720"/>
             </Grid.ColumnDefinitions>
 
-            <DockPanel Grid.Column="0">
+            <DockPanel x:Name="MainColumn" Grid.Column="0">
                 <UniformGrid DockPanel.Dock="Top" Rows="1" Columns="6" Margin="0,0,0,10">
                     <Border Background="{StaticResource CardBrush}"
                             BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,8,0">
@@ -68,7 +80,7 @@
                     <Border Background="{StaticResource CardBrush}" BorderBrush="{StaticResource LineBrush}"
                             BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,8,0">
                         <StackPanel>
-                            <TextBlock Text="IFB 两点 (A)" Foreground="{StaticResource AvgBrush}"/>
+                            <TextBlock Text="IFB 单点 (A)" Foreground="{StaticResource AvgBrush}"/>
                             <TextBlock x:Name="AvgText" Text="—" FontSize="20" FontWeight="SemiBold"/>
                         </StackPanel>
                     </Border>
@@ -88,31 +100,81 @@
                     </Border>
                 </UniformGrid>
 
-                <Border DockPanel.Dock="Top" Background="{StaticResource CardBrush}"
+                <Grid x:Name="PlotHost">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="280" MinHeight="180"/>
+                        <RowDefinition Height="8"/>
+                        <RowDefinition Height="*" MinHeight="100"/>
+                    </Grid.RowDefinitions>
+                <Border x:Name="PlotCard" Grid.Row="0" Background="{StaticResource CardBrush}"
                         BorderBrush="{StaticResource LineBrush}" BorderThickness="1"
-                        CornerRadius="6" Padding="10" Margin="0,0,0,10" Height="280">
+                        CornerRadius="6" Padding="10" Margin="0">
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
                         <DockPanel Margin="0,0,0,6">
-                            <TextBlock Text="电流波形（约 8 s）" FontWeight="SemiBold"/>
-                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                <TextBlock Text="IREF" Foreground="{StaticResource IrefBrush}" Margin="0,0,12,0"/>
-                                <TextBlock Text="î" Foreground="{StaticResource HatBrush}" Margin="0,0,12,0"/>
-                                <TextBlock Text="IFB" Foreground="{StaticResource AvgBrush}"/>
-                            </StackPanel>
+                            <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+                                <TextBlock DockPanel.Dock="Left" Text="电流波形" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
+                                    <RadioButton x:Name="CapSingle" Content="单次采集" IsChecked="True" Margin="0,0,14,0"
+                                                 GroupName="CapMode" Checked="CapMode_Changed"/>
+                                    <RadioButton x:Name="CapCont" Content="连续采集" GroupName="CapMode" Checked="CapMode_Changed"/>
+                                    <TextBlock Text="采样率" VerticalAlignment="Center" Margin="8,0,6,0"/>
+                                    <ComboBox x:Name="CapHzPick" Width="88" IsEditable="True" Text="1000"
+                                              ToolTip="单次采集可选。实际值会取 50 kHz 的整数分频。连续采集由波特率决定。">
+                                        <ComboBoxItem Content="50000"/>
+                                        <ComboBoxItem Content="25000"/>
+                                        <ComboBoxItem Content="10000"/>
+                                        <ComboBoxItem Content="5000"/>
+                                        <ComboBoxItem Content="2500"/>
+                                        <ComboBoxItem Content="2000"/>
+                                        <ComboBoxItem Content="1000"/>
+                                        <ComboBoxItem Content="500"/>
+                                        <ComboBoxItem Content="200"/>
+                                        <ComboBoxItem Content="100"/>
+                                    </ComboBox>
+                                    <TextBlock Text="Hz" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                                    <TextBlock Text="点数" VerticalAlignment="Center" Margin="12,0,6,0"/>
+                                    <TextBox x:Name="CapNBox" Width="72" Text="4000" VerticalAlignment="Center"
+                                             ToolTip="单次采集的点数，最多 16384。"/>
+                                </StackPanel>
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
+                                    <Button Content="开始采样" Style="{StaticResource OkBtn}" Click="CapStart_Click" Margin="0,0,8,0"/>
+                                    <Button Content="停止" Click="CapStop_Click" Margin="0,0,12,0"/>
+                                    <Button Content="复位" Click="PlotReset_Click" Margin="0,0,8,0"
+                                            ToolTip="恢复全貌。双击波形也可以。"/>
+                                    <Button x:Name="PlotFullBtn" Content="全屏" Click="PlotFull_Click" Margin="0,0,12,0"/>
+                                    <TextBlock Text="IREF" Foreground="{StaticResource IrefBrush}" Margin="0,0,12,0" VerticalAlignment="Center"/>
+                                    <TextBlock Text="î" Foreground="{StaticResource HatBrush}" Margin="0,0,12,0" VerticalAlignment="Center"/>
+                                    <TextBlock Text="IFB" Foreground="{StaticResource AvgBrush}" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </DockPanel>
+                            <TextBlock x:Name="CapStatus" Foreground="{StaticResource MuteBrush}" TextWrapping="Wrap"
+                                       Text="单次采集可选采样率。连续采集的频率由当前波特率决定。"/>
                         </DockPanel>
-                        <Canvas x:Name="Plot" Grid.Row="1" ClipToBounds="True" SizeChanged="Plot_SizeChanged">
+                        <Canvas x:Name="Plot" Grid.Row="1" ClipToBounds="True" Background="Transparent"
+                                SizeChanged="Plot_SizeChanged"
+                                MouseLeftButtonDown="Plot_Down" MouseMove="Plot_Move"
+                                MouseLeftButtonUp="Plot_Up" MouseRightButtonDown="Plot_PanDown"
+                                MouseRightButtonUp="Plot_PanUp" MouseWheel="Plot_Wheel"
+                                ToolTip="左键拖出矩形放大，右键拖动平移，滚轮缩放，双击复位。">
+                            <Canvas x:Name="PlotAxis" IsHitTestVisible="False"/>
+                            <Line x:Name="ZeroLine" Stroke="#FF5C6778" StrokeThickness="1"/>
                             <Polyline x:Name="LineIref" Stroke="#FF5B9BD5" StrokeThickness="1.6"/>
                             <Polyline x:Name="LineHat" Stroke="#FF3DDC97" StrokeThickness="1.6"/>
                             <Polyline x:Name="LineAvg" Stroke="#FFF0A030" StrokeThickness="1.2"/>
-                            <Line x:Name="ZeroLine" Stroke="#FF3A414C" StrokeThickness="1"/>
+                            <Rectangle x:Name="ZoomRect" Stroke="#FF8AB4F8" StrokeThickness="1"
+                                       Fill="#338AB4F8" Visibility="Collapsed" IsHitTestVisible="False"/>
                         </Canvas>
                     </Grid>
                 </Border>
-
+                <GridSplitter Grid.Row="1" Height="8" HorizontalAlignment="Stretch"
+                              VerticalAlignment="Stretch" ResizeDirection="Rows"
+                              Background="{StaticResource LineBrush}"
+                              ToolTip="上下拖动，调整波形高度"/>
+                <DockPanel Grid.Row="2">
                 <GroupBox Header="给定与模式">
                     <StackPanel>
                         <Grid>
@@ -127,18 +189,18 @@
                                     TickFrequency="0.5" IsSnapToTickEnabled="False"
                                     ValueChanged="IrefSlider_Changed" VerticalAlignment="Center" Margin="8,0"/>
                             <TextBox x:Name="IrefCmdBox" Grid.Column="2" Text="0.000"/>
-                            <Button Grid.Column="3" Content="下发 $R" Style="{StaticResource AccentBtn}" Click="ApplyIref_Click"/>
+                            <Button Grid.Column="3" Content="下发给定" Style="{StaticResource AccentBtn}" Click="ApplyIref_Click"/>
                         </Grid>
                         <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                            <Button Content="模拟给定 A" Click="Analog_Click"/>
+                            <Button Content="模拟给定" Click="Analog_Click"/>
                             <Button Content="Force 0.5 A" Click="Force_Click"/>
-                            <Button Content="Z 等宽 dither（关 PI）" Style="{StaticResource DangerBtn}" Click="Zero_Click"/>
-                            <Button Content="清除故障 $C" Click="ClearFault_Click"/>
+                            <Button Content="强制零位（关 PI）" Style="{StaticResource DangerBtn}" Click="Zero_Click"/>
+                            <Button Content="清除故障" Click="ClearFault_Click"/>
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                             <Label Content="PWM"/>
-                            <RadioButton x:Name="ModeTri" Content="三电平 T" IsChecked="True" Click="ModeTri_Click"/>
-                            <RadioButton x:Name="ModeBi" Content="双极性 B" Click="ModeBi_Click"/>
+                            <RadioButton x:Name="ModeTri" Content="三电平" GroupName="PwmMode" IsChecked="True" Click="ModeTri_Click"/>
+                            <RadioButton x:Name="ModeBi" Content="双极性" GroupName="PwmMode" Click="ModeBi_Click"/>
                             <TextBlock x:Name="FlagText" Margin="24,0,0,0" VerticalAlignment="Center"
                                        Foreground="{StaticResource MuteBrush}" Text="ov=  hold=  armed=  pair="/>
                         </StackPanel>
@@ -158,71 +220,113 @@
                                  FontFamily="Consolas" FontSize="12"/>
                     </DockPanel>
                 </GroupBox>
+                </DockPanel>
+                </Grid>
             </DockPanel>
 
-            <DockPanel Grid.Column="2">
-                <GroupBox Header="环路参数" DockPanel.Dock="Top">
-                    <StackPanel>
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="90"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <Grid.RowDefinitions>
-                                <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
-                                <RowDefinition/><RowDefinition/><RowDefinition/>
-                            </Grid.RowDefinitions>
-                            <Label Grid.Row="0" Content="Kp"/>
-                            <TextBox x:Name="KpBox" Grid.Row="0" Grid.Column="1" Margin="0,3" Text="0.3"/>
-                            <Label Grid.Row="1" Content="Ki"/>
-                            <TextBox x:Name="KiBox" Grid.Row="1" Grid.Column="1" Margin="0,3" Text="60"/>
-                            <Label Grid.Row="2" Content="观测 α"/>
-                            <TextBox x:Name="ObsBox" Grid.Row="2" Grid.Column="1" Margin="0,3" Text="0.118"
-                                     LostFocus="ObsAlpha_Changed"/>
-                            <Label Grid.Row="3" Content="观测 Hz"/>
-                            <TextBox x:Name="ObsHzBox" Grid.Row="3" Grid.Column="1" Margin="0,3" Text="1000"
-                                     LostFocus="ObsHz_Changed"/>
-                            <Label Grid.Row="4" Content="IREF LPF α"/>
-                            <TextBox x:Name="LpfBox" Grid.Row="4" Grid.Column="1" Margin="0,3" Text="0.838"/>
-                            <Label Grid.Row="5" Content="R-FF m/A"/>
-                            <TextBox x:Name="FfBox" Grid.Row="5" Grid.Column="1" Margin="0,3" Text="0.0379"/>
-                            <Label Grid.Row="6" Content="Vbus (V)"/>
-                            <TextBox x:Name="VbusBox" Grid.Row="6" Grid.Column="1" Margin="0,3" Text="48"
-                                     LostFocus="Plant_Changed" ToolTip="24–48 V"/>
-                            <Label Grid.Row="7" Content="R (Ω)"/>
-                            <TextBox x:Name="RcoilBox" Grid.Row="7" Grid.Column="1" Margin="0,3" Text="3.62"
-                                     LostFocus="Plant_Changed"/>
-                            <Label Grid.Row="8" Content="L (mH)"/>
-                            <TextBox x:Name="LcoilBox" Grid.Row="8" Grid.Column="1" Margin="0,3" Text="1.188"/>
-                        </Grid>
-                        <TextBlock Margin="0,8,0,8" Foreground="{StaticResource MuteBrush}" TextWrapping="Wrap"
-                                   Text="α≈0.096→800 Hz，0.118→1 kHz。不要回到 0.63（8 kHz），PI 会再追 IFB 毛刺。"/>
-                        <StackPanel Orientation="Horizontal">
-                            <Button Content="写入 $S" Style="{StaticResource OkBtn}" Click="ApplyParams_Click"/>
-                            <Button Content="读回 $D" Click="ReadParams_Click"/>
-                        </StackPanel>
-                        <TextBlock x:Name="NvText" Margin="0,8,0,4" Foreground="{StaticResource MuteBrush}"
-                                   Text="Flash：未读（nv=）"/>
-                        <StackPanel Orientation="Horizontal">
-                            <Button Content="保存到 Flash $W" Style="{StaticResource AccentBtn}" Click="SaveNv_Click"/>
-                            <Button Content="从 Flash 加载 $L" Click="LoadNv_Click"/>
-                        </StackPanel>
-                        <Button Content="恢复出厂 $E" Style="{StaticResource DangerBtn}" Margin="0,8,0,0"
-                                HorizontalAlignment="Left" Click="FactoryNv_Click"/>
-                        <TextBlock Margin="0,6,0,0" Foreground="{StaticResource MuteBrush}" TextWrapping="Wrap"
-                                   Text="$S 只改 RAM。掉电请再按保存。保存应先出现 NV BUSY，再出现 NV SAVE 或 NV ERR。"/>
-                    </StackPanel>
-                </GroupBox>
+            <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch"
+                          VerticalAlignment="Stretch" ResizeDirection="Columns"
+                          Background="{StaticResource LineBrush}"
+                          ToolTip="左右拖动，调整参数栏宽度"/>
 
-                <GroupBox Header="采样对照" VerticalAlignment="Stretch">
-                    <StackPanel>
-                        <TextBlock x:Name="SampText" FontFamily="Consolas" TextWrapping="Wrap"
-                                   Text="ip / im / ADC —"/>
-                        <TextBlock Margin="0,12,0,0" Foreground="{StaticResource MuteBrush}" TextWrapping="Wrap"
-                                   Text="î 应明显比 IFB 两点均值光滑。力控看 î 和 m，不要用 iavg 判断纹波。UART Z 关 PI、等宽 dither；模拟 A 把给定交还给模拟 IREF。"/>
-                    </StackPanel>
-                </GroupBox>
-            </DockPanel>
+            <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          CanContentScroll="False" PanningMode="VerticalOnly">
+                <StackPanel>
+                    <GroupBox Header="环路参数">
+                        <StackPanel>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="90"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
+                                    <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
+                                    <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
+                                    <RowDefinition/><RowDefinition/>
+                                </Grid.RowDefinitions>
+                                <Label Grid.Row="0" Content="Kp"/>
+                                <TextBox x:Name="KpBox" Grid.Row="0" Grid.Column="1" Margin="0,3" Text="0.3"/>
+                                <Label Grid.Row="1" Content="Ki"/>
+                                <TextBox x:Name="KiBox" Grid.Row="1" Grid.Column="1" Margin="0,3" Text="60"/>
+                                <Label Grid.Row="2" Content="PI 反馈" VerticalAlignment="Center"/>
+                                <WrapPanel Grid.Row="2" Grid.Column="1" Margin="0,3">
+                                    <RadioButton x:Name="FdbkObs" Content="观测 î" IsChecked="True" Margin="0,0,12,4"
+                                                 GroupName="PiFdbk" ToolTip="fdbk=1：PiStep(iref, ifb_hat)"/>
+                                <RadioButton x:Name="FdbkAvg" Content="单点 IFB" Margin="0,0,12,4" GroupName="PiFdbk"
+                                             ToolTip="fdbk=0：电流环用两段续流的平均电流。"/>
+                                </WrapPanel>
+                                <Label Grid.Row="3" Content="观测 α"/>
+                                <TextBox x:Name="ObsBox" Grid.Row="3" Grid.Column="1" Margin="0,3" Text="0.634"
+                                         LostFocus="ObsAlpha_Changed"/>
+                                <Label Grid.Row="4" Content="观测 Hz"/>
+                                <TextBox x:Name="ObsHzBox" Grid.Row="4" Grid.Column="1" Margin="0,3" Text="8000"
+                                         LostFocus="ObsHz_Changed"/>
+                                <Label Grid.Row="5" Content="IREF LPF α"/>
+                                <TextBox x:Name="LpfBox" Grid.Row="5" Grid.Column="1" Margin="0,3" Text="0.838"/>
+                                <Label Grid.Row="6" Content="R-FF m/A"/>
+                                <TextBox x:Name="FfBox" Grid.Row="6" Grid.Column="1" Margin="0,3" Text="0"/>
+                                <Label Grid.Row="7" Content="Vbus (V)"/>
+                                <TextBox x:Name="VbusBox" Grid.Row="7" Grid.Column="1" Margin="0,3" Text="48"
+                                         ToolTip="24–48 V"/>
+                                <Label Grid.Row="8" Content="R (Ω)"/>
+                                <TextBox x:Name="RcoilBox" Grid.Row="8" Grid.Column="1" Margin="0,3" Text="5.42"/>
+                                <Label Grid.Row="9" Content="L (mH)"/>
+                                <TextBox x:Name="LcoilBox" Grid.Row="9" Grid.Column="1" Margin="0,3" Text="0.912"/>
+                                <Label Grid.Row="10" Content="t_d (ns)"/>
+                                <TextBox x:Name="DtBox" Grid.Row="10" Grid.Column="1" Margin="0,3" Text="400"
+                                         ToolTip="双极性死区补偿，两个沿合计，默认 400 ns。0 关闭。三电平闭环时两边至少各 600 ns，指令只加长一边。开环保持时两边都关。"/>
+                                <Label Grid.Row="11" Content="陷波1 Hz"/>
+                                <TextBox x:Name="Notch0Box" Grid.Row="11" Grid.Column="1" Margin="0,3" Text="0"
+                                         ToolTip="电流指令陷波，0 关闭。Q=5。"/>
+                                <Label Grid.Row="12" Content="陷波2 Hz"/>
+                                <TextBox x:Name="Notch1Box" Grid.Row="12" Grid.Column="1" Margin="0,3" Text="0"
+                                         ToolTip="0 关闭"/>
+                                <Label Grid.Row="13" Content="陷波3 Hz"/>
+                                <TextBox x:Name="Notch2Box" Grid.Row="13" Grid.Column="1" Margin="0,3" Text="0"
+                                         ToolTip="0 关闭"/>
+                                <Label Grid.Row="14" Content="陷波4 Hz"/>
+                                <TextBox x:Name="Notch3Box" Grid.Row="14" Grid.Column="1" Margin="0,3" Text="0"
+                                         ToolTip="0 关闭"/>
+                                <Label Grid.Row="15" Content="增益" VerticalAlignment="Center"/>
+                                <WrapPanel Grid.Row="15" Grid.Column="1" Margin="0,3">
+                                    <RadioButton x:Name="GzOff" Content="单段" IsChecked="True" Margin="0,0,12,4"
+                                                 GroupName="GainZone"
+                                                 ToolTip="gz=0：Kp、Ki 全程不变。"/>
+                                    <RadioButton x:Name="GzOn" Content="两段" Margin="0,0,12,4" GroupName="GainZone"
+                                                 ToolTip="gz=1：电流指令变慢约 40 ms 后，Kp 和 Ki 同时乘静止比例。运动时约 2 ms 恢复。不看电流大小，也不看电流误差。"/>
+                                </WrapPanel>
+                                <Label Grid.Row="16" Content="静止比例"/>
+                                <TextBox x:Name="GsBox" Grid.Row="16" Grid.Column="1" Margin="0,3" Text="0.35"
+                                         ToolTip="静止时 Kp、Ki 同乘这个数。0.35 约把 820 Hz 增益降 9 dB。"/>
+                            </Grid>
+                            <TextBlock Margin="0,8,0,8" Foreground="{StaticResource MuteBrush}" TextWrapping="Wrap"
+                                       Text="写入后立即生效。掉电保持需保存到 Flash。"/>
+                            <WrapPanel>
+                                <Button Content="写入参数" Style="{StaticResource OkBtn}" Click="ApplyParams_Click"/>
+                                <Button Content="测定 t_d" Click="MeasureDt_Click"
+                                        ToolTip="使能且机构停住。双极性下自动测定驱动器死区，约 0.3 s。结果在 RAM，掉电需再保存。"/>
+                                <Button Content="读回参数" Click="ReadParams_Click"/>
+                                <Button Content="导出参数" Click="ExportParams_Click"/>
+                                <Button Content="导入参数" Click="ImportParams_Click"/>
+                            </WrapPanel>
+                            <TextBlock x:Name="NvText" Margin="0,8,0,4" Foreground="{StaticResource MuteBrush}"
+                                       Text="Flash：未读"/>
+                            <WrapPanel>
+                                <Button Content="保存到 Flash" Style="{StaticResource AccentBtn}" Click="SaveNv_Click"/>
+                                <Button Content="从 Flash 加载" Click="LoadNv_Click"/>
+                            </WrapPanel>
+                            <Button Content="恢复出厂" Style="{StaticResource DangerBtn}" Margin="0,8,0,0"
+                                    HorizontalAlignment="Left" Click="FactoryNv_Click"/>
+                            <TextBlock Margin="0,6,0,0" Foreground="{StaticResource MuteBrush}" TextWrapping="Wrap"
+                                       Text="写入参数只改运行中的 RAM。掉电保持请再按「保存到 Flash」。"/>
+                        </StackPanel>
+                    </GroupBox>
+                </StackPanel>
+            </ScrollViewer>
         </Grid>
     </DockPanel>
+    <Grid x:Name="PlotOverlay" Visibility="Collapsed" Background="#F0181C22" Panel.ZIndex="20"/>
+    </Grid>
 </Window>

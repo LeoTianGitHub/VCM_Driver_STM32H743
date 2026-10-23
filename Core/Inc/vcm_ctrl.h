@@ -1,6 +1,6 @@
 /**
  * @file    vcm_ctrl.h
- * @brief   VCM current-loop API - observer + single PI + R/L FF, tri-level PWM
+ * @brief   VCM current-loop API - observer + PI + R/L FF, tri-level PWM
  */
 #ifndef VCM_CTRL_H
 #define VCM_CTRL_H
@@ -26,8 +26,8 @@ typedef struct
   float ifb_avg_a;     /* 2-pt duration-weighted mean (scope / OCP / UART G) */
   float ifb_hat_a;     /* observer current → PI */
   float ifb_filt_a;    /* Live: alias of ifb_hat_a */
-  float ifb_ip_a;
-  float ifb_im_a;
+  float ifb_ip_a;      /* fixed-phase IFB (same instant as im) */
+  float ifb_im_a;      /* −coast sample */
   float ifb_raw_a;
   float ifb_offset_a;
   float iref_cal_acc;
@@ -37,8 +37,8 @@ typedef struct
   float kp;
   float ki;
   float ff_mod_per_a;
-  float iref_lpf_a;    /* Live/F command LPF α; 0.838 ≈ analog 14.5 kHz */
-  float i_obs_a;       /* observer α; 0.118 ≈ 1 kHz @ 50 kHz */
+  float iref_lpf_a;    /* Live/F command LPF α; 0.838 ≈ analog 14.5 kHz @ 50 kHz */
+  float i_obs_a;       /* observer α; 0.634 ≈ 8000 Hz @ 50 kHz */
   float vbus_v;        /* plant Vbus; observer + R-FF */
   float coil_l_h;      /* plant L */
   float coil_r_ohm;    /* plant R (coil; Rs added in observer/FF) */
@@ -54,13 +54,18 @@ typedef struct
   uint16_t ifb_cal_count;
   VCM_State_t state;
   uint8_t adc_active_valid;
-  uint8_t adc_pair_ok;
+  uint8_t adc_pair_ok;        /* 1 = this period's single IFB DMA sample is in */
   uint8_t pwm_armed;
   uint8_t calib_valid;
   uint8_t iref_override_en;
   uint8_t iref_hold_en;       /* 1 = UART 'Z': PI off, equal dither */
-  uint8_t pi_steady;          /* unused when VCM_PI_STEADY_EN=0 */
+  uint8_t pi_fdbk;            /* VCM_PI_FDBK_*: 0=ifb_avg 1=ifb_hat */
   uint8_t pwm_mode;           /* VCM_PWM_MODE_*; Live Expr / UART B|T */
+  uint16_t drv_dt_ns;         /* dead-time compensation width, ns; 0 = off */
+  uint16_t notch_hz[4];       /* current-command notches, Hz; 0 = off */
+  float gz_scale;             /* standstill Kp/Ki scale, 0.05..1 */
+  uint8_t gz_en;              /* 0 = one zone, 1 = lower gain when command is quiet */
+  uint8_t gz_hold;            /* 1 = standstill scale is applied this period */
   uint32_t isr_ticks;
   uint32_t start_count;
   uint32_t stop_count;
@@ -101,6 +106,8 @@ float VCM_AdcToIrefAmpere(uint16_t raw);
 uint8_t VCM_ServiceUartCmd(uint8_t cmd);
 /** Byte from USART1: legacy G/F/Z/A/B/T or "$...\\n" host frames. */
 void VCM_ServiceUartByte(uint8_t b);
+/** Pop one USART1 byte. Also keeps bytes received while a capture line is transmitting. */
+uint8_t VCM_UartRxPop(uint8_t *out);
 /** Run deferred $W/$E Flash erase/program from main loop (not from the UART parser). */
 void VCM_NvPoll(void);
 
