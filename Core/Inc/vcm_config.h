@@ -68,11 +68,10 @@
 #define VCM_IREF_COUNTS_PER_A   (VCM_IREF_V_PER_A * VCM_ADC_COUNTS_PER_V)
 #define VCM_IREF_POLARITY       (-1.0f)
 
-/* PI: ~3 kHz crossover @ 50 kHz (zero ~320 Hz, PM ~55°).
- * One gain set at every current (same as Z驱动). Analog RC ~14.5 kHz.
+/* PI: Kp=0.3, Ki=60. One gain set. Analog RC ~14.5 kHz.
  * PI follows observer î, not the raw 2-pt IFB. */
-#define VCM_KP                  0.23f
-#define VCM_KI                  460.0f
+#define VCM_KP                  0.30f
+#define VCM_KI                  60.0f
 #define VCM_I_INTEGRAL_LIM      0.30f
 
 /* 0 = single-stage PI + observer (Z驱动). 1 = legacy two-zone hold (unused). */
@@ -171,7 +170,7 @@
 
 /* Host frames: "$" ... "\n" @ 115200. Avoid 0x05 / 0xA0 (IAP).
  *   $I  identify     $P  telemetry     $D  dump params
- *   $S kp=230 ki=460000 obs=118 lpf=838 ff=37916 vbus=48000 r=3620 l=1188
+ *   $S kp=300 ki=60000 obs=118 lpf=838 ff=37916 vbus=48000 r=3620 l=1188
  *      (kp/obs/lpf/vbus/r ×1000, ki ×1000, ff ×1e6, l = µH)
  *   $R <mA>  IREF override (PI on)   $Z $A $F $B $T $C $G as lines too
  *   $W  save RAM params to FLASH Sector3   $L reload   $E factory erase
@@ -183,6 +182,6 @@
 #define VCM_HW_VERSION          1U   /* PCB / hardware revision */
 #define VCM_FW_VERSION_MAJOR    1U
 #define VCM_FW_VERSION_MINOR    0U
-#define VCM_FW_VERSION_PATCH    0U
+#define VCM_FW_VERSION_PATCH    1U
 
 #endif /* VCM_CONFIG_H */

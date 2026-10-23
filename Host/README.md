@@ -37,9 +37,9 @@ IAP 升级只擦 Sector 1–2，不会清掉参数。不要对 Sector3 做全片
 
 | 主机 | 从机 |
 |------|------|
-| `$I` | `ID VCM_H743 hw=1 fw=1.0.0 proto=2 pwm=50000 nv=ram` |
+| `$I` | `ID VCM_H743 hw=1 fw=1.0.1 proto=2 pwm=50000 nv=ram` |
 | `$P` | `TL iref_ma=… ihat_ma=… iavg_ma=… …` |
-| `$D` | `PR hw=1 fw=1.0.0 proto=2 kp_e3=230 ki_e3=460000 obs_e3=118 …` |
+| `$D` | `PR hw=1 fw=1.0.1 proto=2 kp_e3=300 ki_e3=60000 obs_e3=118 …` |
 | `$S kp=… ki=… obs=… lpf=… ff=… vbus=… r=… l=…` | `OK` / `ERR`（vbus/r ×1000，l=µH） |
 | `$R 1500` | IREF 覆盖 1.500 A（PI 开） |
 | `$W` | `NV SAVE` / `NV ERR` 把 RAM 参数写入 Flash |

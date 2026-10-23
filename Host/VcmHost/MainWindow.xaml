@@ -173,9 +173,9 @@
                                 <RowDefinition/><RowDefinition/><RowDefinition/>
                             </Grid.RowDefinitions>
                             <Label Grid.Row="0" Content="Kp"/>
-                            <TextBox x:Name="KpBox" Grid.Row="0" Grid.Column="1" Margin="0,3" Text="0.23"/>
+                            <TextBox x:Name="KpBox" Grid.Row="0" Grid.Column="1" Margin="0,3" Text="0.3"/>
                             <Label Grid.Row="1" Content="Ki"/>
-                            <TextBox x:Name="KiBox" Grid.Row="1" Grid.Column="1" Margin="0,3" Text="460"/>
+                            <TextBox x:Name="KiBox" Grid.Row="1" Grid.Column="1" Margin="0,3" Text="60"/>
                             <Label Grid.Row="2" Content="观测 α"/>
                             <TextBox x:Name="ObsBox" Grid.Row="2" Grid.Column="1" Margin="0,3" Text="0.118"
                                      LostFocus="ObsAlpha_Changed"/>
