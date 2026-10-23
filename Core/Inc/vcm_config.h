@@ -82,7 +82,7 @@
 #define VCM_IREF_POLARITY       (-1.0f)
 
 /* Single-zone PI @ 50 kHz: fc≈1.5 kHz (zero ~320 Hz).
- * Default feedback is the 2-point IFB average. Host $S fdbk=1 uses î. */
+ * Default feedback is the observer. Host $S fdbk=0 uses the 2-point IFB average. */
 #define VCM_KP                  0.12f
 #define VCM_KI                  240.0f
 #define VCM_I_INTEGRAL_LIM      0.30f
@@ -102,7 +102,7 @@
 /* PI feedback: 0 = ifb_avg (direct), 1 = ifb_hat (observer). Host key fdbk=. */
 #define VCM_PI_FDBK_AVG         0U
 #define VCM_PI_FDBK_OBS         1U
-#define VCM_PI_FDBK_DEFAULT     VCM_PI_FDBK_AVG
+#define VCM_PI_FDBK_DEFAULT     VCM_PI_FDBK_OBS
 
 /* Plant FF: bipolar Vcoil ≈ 2·m·Vbus. L-FF off while tuning PI.
  * Live/UART override uses the same 1st-order as analog RC (C32/C33 =
@@ -124,11 +124,11 @@
 /*
  * Current observer on the period-average IFB.
  *   î ← î + (Ts/L)(2·m·Vbus − R·î) + α(ifb_avg − î)
- * Quiet: fo≈700 Hz (below fn). HF comes from the voltage model.
- * Live @ 50 kHz: α 0.061≈500 Hz  0.084≈700 Hz  0.118≈1 kHz.
+ * Default fo≈8000 Hz. α is the host milli step 0.634 (displays 7999 Hz).
+ * HF still comes from the voltage model. 1-exp(-2*pi*8000/50000) = 0.634069.
  */
-#define VCM_I_OBS_HZ            700.0f
-#define VCM_I_OBS_A             0.084f   /* 1-exp(-2*pi*700/50000) */
+#define VCM_I_OBS_HZ            8000.0f
+#define VCM_I_OBS_A             0.634f   /* host obs=634 @ 50 kHz */
 #define VCM_I_OBS_R_OHM         (VCM_COIL_R_OHM + VCM_IFB_RS_OHM)
 #define VCM_I_OBS_TS_OVER_L     (VCM_PWM_TS_S / VCM_COIL_L_H)
 
@@ -208,7 +208,7 @@
 
 /* Host frames: "$" ... "\n" @ 115200. Avoid 0x05 / 0xA0 (IAP).
  *   $I  identify     $P  telemetry     $D  dump params
- *   $S kp=120 ki=240000 obs=84 lpf=838 ff=0 vbus=48000 r=3620 l=1188 fdbk=0 dt=400 n0=0 n1=0 n2=0 n3=0 gz=0 gs=350
+ *   $S kp=120 ki=240000 obs=634 lpf=838 ff=0 vbus=48000 r=3620 l=1188 fdbk=1 dt=400 n0=0 n1=0 n2=0 n3=0 gz=0 gs=350
  *      (kp/obs/lpf/vbus/r ×1000, ki ×1000, ff ×1e6, l = µH, fdbk 0=IFB 1=î,
  *       dt = two-edge compensation ns, 0 = off,
  *       n0..n3 = current-command notch Hz, 0 = off,
@@ -232,6 +232,6 @@
 #define VCM_HW_VERSION          1U   /* PCB / hardware revision */
 #define VCM_FW_VERSION_MAJOR    1U
 #define VCM_FW_VERSION_MINOR    4U
-#define VCM_FW_VERSION_PATCH    53U
+#define VCM_FW_VERSION_PATCH    54U
 
 #endif /* VCM_CONFIG_H */

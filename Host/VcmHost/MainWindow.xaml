@@ -252,16 +252,16 @@
                                 <TextBox x:Name="KiBox" Grid.Row="1" Grid.Column="1" Margin="0,3" Text="240"/>
                                 <Label Grid.Row="2" Content="PI 反馈" VerticalAlignment="Center"/>
                                 <WrapPanel Grid.Row="2" Grid.Column="1" Margin="0,3">
-                                    <RadioButton x:Name="FdbkObs" Content="观测 î" Margin="0,0,12,4"
+                                    <RadioButton x:Name="FdbkObs" Content="观测 î" IsChecked="True" Margin="0,0,12,4"
                                                  GroupName="PiFdbk" ToolTip="fdbk=1：PiStep(iref, ifb_hat)"/>
-                                <RadioButton x:Name="FdbkAvg" Content="单点 IFB" IsChecked="True" Margin="0,0,12,4" GroupName="PiFdbk"
+                                <RadioButton x:Name="FdbkAvg" Content="单点 IFB" Margin="0,0,12,4" GroupName="PiFdbk"
                                              ToolTip="fdbk=0：电流环用两段续流的平均电流。"/>
                                 </WrapPanel>
                                 <Label Grid.Row="3" Content="观测 α"/>
-                                <TextBox x:Name="ObsBox" Grid.Row="3" Grid.Column="1" Margin="0,3" Text="0.084"
+                                <TextBox x:Name="ObsBox" Grid.Row="3" Grid.Column="1" Margin="0,3" Text="0.634"
                                          LostFocus="ObsAlpha_Changed"/>
                                 <Label Grid.Row="4" Content="观测 Hz"/>
-                                <TextBox x:Name="ObsHzBox" Grid.Row="4" Grid.Column="1" Margin="0,3" Text="700"
+                                <TextBox x:Name="ObsHzBox" Grid.Row="4" Grid.Column="1" Margin="0,3" Text="8000"
                                          LostFocus="ObsHz_Changed"/>
                                 <Label Grid.Row="5" Content="IREF LPF α"/>
                                 <TextBox x:Name="LpfBox" Grid.Row="5" Grid.Column="1" Margin="0,3" Text="0.838"/>

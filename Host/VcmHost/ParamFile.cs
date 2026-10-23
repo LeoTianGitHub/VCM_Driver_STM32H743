@@ -20,10 +20,10 @@ internal sealed class LoopParams
     public double Ki { get; set; }
 
     [JsonPropertyName("fdbk")]
-    public int Fdbk { get; set; } = 0;
+    public int Fdbk { get; set; } = 1;
 
     [JsonPropertyName("obs")]
-    public double Obs { get; set; }
+    public double Obs { get; set; } = 0.634;
 
     [JsonPropertyName("lpf")]
     public double Lpf { get; set; }
