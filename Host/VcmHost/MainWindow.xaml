@@ -247,9 +247,9 @@
                                     <RowDefinition/><RowDefinition/>
                                 </Grid.RowDefinitions>
                                 <Label Grid.Row="0" Content="Kp"/>
-                                <TextBox x:Name="KpBox" Grid.Row="0" Grid.Column="1" Margin="0,3" Text="0.12"/>
+                                <TextBox x:Name="KpBox" Grid.Row="0" Grid.Column="1" Margin="0,3" Text="0.3"/>
                                 <Label Grid.Row="1" Content="Ki"/>
-                                <TextBox x:Name="KiBox" Grid.Row="1" Grid.Column="1" Margin="0,3" Text="240"/>
+                                <TextBox x:Name="KiBox" Grid.Row="1" Grid.Column="1" Margin="0,3" Text="60"/>
                                 <Label Grid.Row="2" Content="PI 反馈" VerticalAlignment="Center"/>
                                 <WrapPanel Grid.Row="2" Grid.Column="1" Margin="0,3">
                                     <RadioButton x:Name="FdbkObs" Content="观测 î" IsChecked="True" Margin="0,0,12,4"

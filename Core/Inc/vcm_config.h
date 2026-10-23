@@ -81,10 +81,10 @@
 #define VCM_IREF_COUNTS_PER_A   (VCM_IREF_V_PER_A * VCM_ADC_COUNTS_PER_V)
 #define VCM_IREF_POLARITY       (-1.0f)
 
-/* Single-zone PI @ 50 kHz: fc≈1.5 kHz (zero ~320 Hz).
+/* Single-zone PI @ 50 kHz: fc≈3.9 kHz (zero ~32 Hz).
  * Default feedback is the observer. Host $S fdbk=0 uses the 2-point IFB average. */
-#define VCM_KP                  0.12f
-#define VCM_KI                  240.0f
+#define VCM_KP                  0.30f
+#define VCM_KI                  60.0f
 #define VCM_I_INTEGRAL_LIM      0.30f
 
 /* Two-zone PI. Motion uses Kp/Ki. After the current command has been
@@ -208,7 +208,7 @@
 
 /* Host frames: "$" ... "\n" @ 115200. Avoid 0x05 / 0xA0 (IAP).
  *   $I  identify     $P  telemetry     $D  dump params
- *   $S kp=120 ki=240000 obs=634 lpf=838 ff=0 vbus=48000 r=3620 l=1188 fdbk=1 dt=400 n0=0 n1=0 n2=0 n3=0 gz=0 gs=350
+ *   $S kp=300 ki=60000 obs=634 lpf=838 ff=0 vbus=48000 r=3620 l=1188 fdbk=1 dt=400 n0=0 n1=0 n2=0 n3=0 gz=0 gs=350
  *      (kp/obs/lpf/vbus/r ×1000, ki ×1000, ff ×1e6, l = µH, fdbk 0=IFB 1=î,
  *       dt = two-edge compensation ns, 0 = off,
  *       n0..n3 = current-command notch Hz, 0 = off,
