@@ -15,8 +15,13 @@ static volatile uint16_t vcm_adc2_dma __attribute__((section(".dma_buffer"), ali
 static void VCM_HRTIM_ApplyDuty(float m);
 static void VCM_DtCalAbort(void);
 static void VCM_DtCalSample(void);
+static void VCM_CapPush(void);
+static void VCM_CapArm(const char *p, const char *end);
+static void VCM_CapStop(void);
 static float VCM_DtCalAmp(uint8_t step);
-static void VCM_HRTIM_SetAdcPhase(void);
+static void VCM_HRTIM_SetAdcPhase(uint16_t z0, uint16_t z1);
+static void VCM_HRTIM_SetAdcPhasePair(uint16_t z0a, uint16_t z1a,
+                                      uint16_t z0b, uint16_t z1b);
 static void VCM_ConfigHalfBridge(uint32_t timer_idx, uint32_t output1, uint32_t output2);
 static void VCM_FaultPin_Set(bool fault_active);
 static void VCM_LoopStateReset(void);
@@ -33,13 +38,43 @@ static void VCM_DiagService(void);
 #endif
 
 static volatile uint8_t vcm_nv_req; /* 1 = $W, 2 = $E */
+#define VCM_CAP_SAMPLES      16384U
+#define VCM_CAP_PAIRS_LINE   8U
+/* "CAP d=" + 16×"-32767" + 15 commas + CRLF. 8N1 byte time is baud/10. */
+#define VCM_CAP_LINE_BYTES   119U
+static int16_t vcm_cap_buf[VCM_CAP_SAMPLES * 2U] __attribute__((section(".dma_buffer"), aligned(32)));
+static volatile uint8_t vcm_cap_run;
+static volatile uint8_t vcm_cap_done;
+static volatile uint8_t vcm_cap_mode;
+static volatile uint32_t vcm_cap_div;
+static volatile uint32_t vcm_cap_div_cnt;
+static volatile uint32_t vcm_cap_n;
+static volatile uint32_t vcm_cap_wr;
+static volatile uint32_t vcm_cap_rd;
+static volatile uint32_t vcm_cap_ovf;
+static volatile uint32_t vcm_cap_hz;
+static volatile uint32_t vcm_cap_id;
 static uint16_t vcm_ocp_hits;
 static uint8_t vcm_chop_a = 0xFFU;
 static uint8_t vcm_chop_b = 0xFFU;
 static uint16_t vcm_idle_deb;
 static float vcm_iref_z1;
 static int8_t vcm_tri_sign; /* +1: A chops / B low; -1: B chops / A low; 0: unset */
-static int8_t vcm_dt_sign;  /* bipolar t_d sign; 0 until |ifb| exceeds hold */
+static int8_t vcm_dt_sign;  /* bipolar compensation sign; 0 until |ifb| exceeds hold */
+static uint8_t vcm_run_bip = 1U; /* 1 = bipolar waveform this period */
+static uint8_t vcm_gz_hold;
+static uint8_t vcm_gz_seed;
+static uint16_t vcm_gz_tick;
+static float vcm_gz_ref;
+static float vcm_gz_ref_z;
+static float vcm_gz_s = 1.0f;
+typedef struct
+{
+  float b0, b1, b2, a1, a2;
+  float x1, x2, y1, y2;
+  uint16_t hz;
+} VCM_Notch_t;
+static VCM_Notch_t vcm_notch[4];
 static uint8_t vcm_dt_cal;   /* 0 idle, 1 running */
 static uint8_t vcm_dt_step;
 static uint8_t vcm_dt_phase;
@@ -95,6 +130,23 @@ static void VCM_LoopStateReset(void)
   vcm_iref_z1 = 0.0f;
   vcm_tri_sign = 0;
   vcm_dt_sign = 0;
+  vcm_run_bip = 1U;
+  vcm_gz_hold = 0U;
+  vcm_gz_seed = 0U;
+  vcm_gz_tick = 0U;
+  vcm_gz_s = 1.0f;
+  g_vcm.gz_hold = 0U;
+  {
+    uint32_t i;
+    for (i = 0U; i < 4U; i++)
+    {
+      vcm_notch[i].hz = 0xFFFFU;
+      vcm_notch[i].x1 = 0.0f;
+      vcm_notch[i].x2 = 0.0f;
+      vcm_notch[i].y1 = 0.0f;
+      vcm_notch[i].y2 = 0.0f;
+    }
+  }
   g_vcm.ifb_avg_a = 0.0f;
   g_vcm.ifb_hat_a = 0.0f;
   g_vcm.ifb_filt_a = 0.0f;
@@ -151,9 +203,215 @@ static void VCM_IobsUpdate(float ifb, uint8_t meas_ok)
   g_vcm.ifb_filt_a = i;
 }
 
+/* w0 stays below pi/2 for f0 <= 10 kHz at 50 kHz. */
+static float VCM_Sin(float x)
+{
+  float x2 = x * x;
+  return x * (1.0f - x2 * (0.16666667f - x2 * (0.008333333f - x2 * 0.0001984127f)));
+}
+
+static float VCM_Cos(float x)
+{
+  float x2 = x * x;
+  return 1.0f - x2 * (0.5f - x2 * (0.041666667f - x2 * 0.0013888889f));
+}
+
+/* Up to 4 series notches on the current command. 0 Hz bypasses that stage.
+ * Q=5. The null sits on the requested Hz at the control sample rate.
+ * The current feedback is left alone: notching it moves the squeal to a shoulder. */
+static void VCM_NotchDesign(VCM_Notch_t *n, uint16_t hz)
+{
+  float w0;
+  float cw;
+  float sw;
+  float alpha;
+  float a0;
+
+  n->hz = hz;
+  n->x1 = 0.0f;
+  n->x2 = 0.0f;
+  n->y1 = 0.0f;
+  n->y2 = 0.0f;
+  if ((hz < 50U) || (hz > 10000U))
+  {
+    n->b0 = 1.0f;
+    n->b1 = 0.0f;
+    n->b2 = 0.0f;
+    n->a1 = 0.0f;
+    n->a2 = 0.0f;
+    return;
+  }
+  w0 = 6.2831853f * ((float)hz / (float)VCM_CTRL_FREQ_HZ);
+  cw = VCM_Cos(w0);
+  sw = VCM_Sin(w0);
+  alpha = sw / 10.0f;
+  a0 = 1.0f + alpha;
+  n->b0 = 1.0f / a0;
+  n->b1 = (-2.0f * cw) / a0;
+  n->b2 = n->b0;
+  n->a1 = n->b1;
+  n->a2 = (1.0f - alpha) / a0;
+}
+
+static float VCM_NotchRun(VCM_Notch_t *n, float x)
+{
+  float y;
+
+  if ((n->hz < 50U) || (n->hz > 10000U))
+  {
+    return x;
+  }
+  y = (n->b0 * x) + (n->b1 * n->x1) + (n->b2 * n->x2)
+      - (n->a1 * n->y1) - (n->a2 * n->y2);
+  n->x2 = n->x1;
+  n->x1 = x;
+  n->y2 = n->y1;
+  n->y1 = y;
+  return y;
+}
+
+static float VCM_IfbNotch(float x)
+{
+  uint32_t i;
+
+  for (i = 0U; i < 4U; i++)
+  {
+    if (vcm_notch[i].hz != g_vcm.notch_hz[i])
+    {
+      VCM_NotchDesign(&vcm_notch[i], g_vcm.notch_hz[i]);
+    }
+    x = VCM_NotchRun(&vcm_notch[i], x);
+  }
+  return x;
+}
+
+/* Duty of one minimum tri-level pulse. */
+static float VCM_TriCmDuty(void)
+{
+  return ((float)VCM_TRI_CM_NS * (float)VCM_PWM_FREQ_HZ) * 1.0e-9f;
+}
+
+static float VCM_ModMax(void)
+{
+  float coast;
+  float mmax;
+
+  if (vcm_run_bip != 0U)
+  {
+    return VCM_BIP_MOD_MAX;
+  }
+  coast = (float)VCM_ADC_ZERO_MIN_CNT / (float)VCM_PWM_PERIOD;
+  mmax = 0.5f - VCM_TriCmDuty() - coast;
+  if (mmax > VCM_MOD_MAX)
+  {
+    mmax = VCM_MOD_MAX;
+  }
+  if (mmax < 0.02f)
+  {
+    mmax = 0.02f;
+  }
+  return mmax;
+}
+
+/*
+ * m = s·Kp·e + Ki_state + R·I_ff + L·di/dt_ff
+ * s = 1 while the command is moving. After it stays quiet, s = gz_scale
+ * on both Kp and Ki. Idle clamp optional. Back-calculation anti-windup.
+ */
+static float VCM_GainZoneScale(float ref, float err)
+{
+  float s1;
+  float di;
+  float adi;
+
+  if (vcm_gz_seed == 0U)
+  {
+    vcm_gz_ref = ref;
+    vcm_gz_ref_z = ref;
+    vcm_gz_seed = 1U;
+  }
+  vcm_gz_ref += VCM_GZ_REF_A * (ref - vcm_gz_ref);
+  di = (vcm_gz_ref - vcm_gz_ref_z) * (float)VCM_CTRL_FREQ_HZ;
+  vcm_gz_ref_z = vcm_gz_ref;
+  adi = VCM_Absf(di);
+
+  if (g_vcm.gz_en == 0U)
+  {
+    vcm_gz_hold = 0U;
+    vcm_gz_tick = 0U;
+    s1 = 1.0f;
+  }
+  else if (vcm_gz_hold != 0U)
+  {
+    if (adi > VCM_GZ_EXIT_A_S)
+    {
+      if (vcm_gz_tick < 0xFFFFU)
+      {
+        vcm_gz_tick++;
+      }
+      if (vcm_gz_tick >= VCM_GZ_EXIT_TICKS)
+      {
+        vcm_gz_hold = 0U;
+        vcm_gz_tick = 0U;
+      }
+    }
+    else
+    {
+      vcm_gz_tick = 0U;
+    }
+    s1 = (vcm_gz_hold != 0U) ? g_vcm.gz_scale : 1.0f;
+  }
+  else
+  {
+    if (adi < VCM_GZ_ENTER_A_S)
+    {
+      if (vcm_gz_tick < 0xFFFFU)
+      {
+        vcm_gz_tick++;
+      }
+      if (vcm_gz_tick >= VCM_GZ_ENTER_TICKS)
+      {
+        vcm_gz_hold = 1U;
+        vcm_gz_tick = 0U;
+      }
+    }
+    else
+    {
+      vcm_gz_tick = 0U;
+    }
+    s1 = (vcm_gz_hold != 0U) ? g_vcm.gz_scale : 1.0f;
+  }
+
+  if (s1 < 0.05f)
+  {
+    s1 = 0.05f;
+  }
+  if (s1 > 1.0f)
+  {
+    s1 = 1.0f;
+  }
+  if (s1 != vcm_gz_s)
+  {
+    g_vcm.integral += (vcm_gz_s - s1) * g_vcm.kp * err;
+    if (g_vcm.integral > VCM_I_INTEGRAL_LIM)
+    {
+      g_vcm.integral = VCM_I_INTEGRAL_LIM;
+    }
+    if (g_vcm.integral < -VCM_I_INTEGRAL_LIM)
+    {
+      g_vcm.integral = -VCM_I_INTEGRAL_LIM;
+    }
+    vcm_gz_s = s1;
+  }
+  g_vcm.gz_hold = ((g_vcm.gz_en != 0U) && (vcm_gz_hold != 0U)) ? 1U : 0U;
+  return vcm_gz_s;
+}
+
 /*
  * m = Kp*e + Ki*∫e + R·I_ff + L·di/dt_ff
- * Idle clamp optional. Single-zone PI (full Kp/Ki).
+ * Idle clamp optional. Two-zone scale is applied in VCM_GainZoneScale.
+ * Back-calculation anti-windup: excess modulation is subtracted from the
+ * integrator, so a saturated accel does not dump extra voltage at arrival.
  */
 static float VCM_PiStep(float ref, float fdbk)
 {
@@ -164,6 +422,7 @@ static float VCM_PiStep(float ref, float fdbk)
   float di_dt;
   float kp;
   float ki;
+  float m_max;
   float ref_abs = VCM_Absf(ref);
 
 #if VCM_IDLE_CLAMP_EN
@@ -227,8 +486,11 @@ static float VCM_PiStep(float ref, float fdbk)
 #endif
 
   err = ref - fdbk;
-  kp = g_vcm.kp;
-  ki = g_vcm.ki;
+  {
+    float zone = VCM_GainZoneScale(ref, err);
+    kp = g_vcm.kp * zone;
+    ki = g_vcm.ki * zone;
+  }
 
   di_dt = (ref - vcm_iref_z1) * (float)VCM_CTRL_FREQ_HZ;
   vcm_iref_z1 = ref;
@@ -254,12 +516,21 @@ static float VCM_PiStep(float ref, float fdbk)
   g_vcm.mod_ff = m_ff;
 
   m_unsat = (kp * err) + g_vcm.integral + m_ff;
-
-  if (!(((m_unsat >= VCM_MOD_MAX) && (err > 0.0f)) ||
-        ((m_unsat <= -VCM_MOD_MAX) && (err < 0.0f))))
+  m_max = VCM_ModMax();
+  if (m_unsat > m_max)
   {
-    g_vcm.integral += ki * err * VCM_PWM_TS_S;
+    m = m_max;
   }
+  else if (m_unsat < -m_max)
+  {
+    m = -m_max;
+  }
+  else
+  {
+    m = m_unsat;
+  }
+
+  g_vcm.integral += (ki * err * VCM_PWM_TS_S) + (m - m_unsat);
   if (g_vcm.integral > VCM_I_INTEGRAL_LIM)
   {
     g_vcm.integral = VCM_I_INTEGRAL_LIM;
@@ -269,15 +540,6 @@ static float VCM_PiStep(float ref, float fdbk)
     g_vcm.integral = -VCM_I_INTEGRAL_LIM;
   }
 
-  m = (kp * err) + g_vcm.integral + m_ff;
-  if (m > VCM_MOD_MAX)
-  {
-    m = VCM_MOD_MAX;
-  }
-  if (m < -VCM_MOD_MAX)
-  {
-    m = -VCM_MOD_MAX;
-  }
   return m;
 }
 
@@ -297,27 +559,136 @@ static void VCM_FaultPin_Set(bool fault_active)
                     fault_active ? VCM_FAULT_ACTIVE_LEVEL : VCM_FAULT_INACTIVE_LEVEL);
 }
 
-/* S&H ends at hold. CMP2 fires earlier by the ADC sample time. */
-static uint16_t VCM_AdcTrigCount(uint16_t hold)
+/* Place the S&H window in the middle of zero-vector [z0, z1]. The whole
+ * window stays at least 1 µs from both edges. CMP2 is the trigger, which
+ * is one S&H time before the hold instant. */
+static uint16_t VCM_AdcTrigForZero(uint16_t z0, uint16_t z1)
 {
-  if (hold > VCM_ADC_SMP_DELAY)
+  uint32_t guard = (uint32_t)VCM_ADC_EDGE_GUARD_CNT;
+  uint32_t win = (uint32_t)VCM_ADC_SMP_DELAY;
+  uint32_t center;
+  uint32_t trig;
+  uint32_t hold;
+  uint32_t min_trig;
+  uint32_t max_hold;
+
+  if (z1 <= (uint16_t)(z0 + 2U))
   {
-    return (uint16_t)(hold - VCM_ADC_SMP_DELAY);
+    z1 = (uint16_t)(z0 + 2U);
   }
-  return 2U;
+  center = ((uint32_t)z0 + (uint32_t)z1) / 2U;
+  if (win < 2U)
+  {
+    win = 2U;
+  }
+  hold = center + (win / 2U);
+  trig = hold - win;
+  min_trig = (uint32_t)z0 + guard;
+  max_hold = (uint32_t)z1 - guard;
+  if ((min_trig + win) > max_hold)
+  {
+    center = ((uint32_t)z0 + (uint32_t)z1) / 2U;
+    if (center > win)
+    {
+      trig = center - (win / 2U);
+    }
+    else
+    {
+      trig = 2U;
+    }
+  }
+  else
+  {
+    if (trig < min_trig)
+    {
+      trig = min_trig;
+    }
+    hold = trig + win;
+    if (hold > max_hold)
+    {
+      hold = max_hold;
+      trig = hold - win;
+    }
+  }
+  if (trig < 2U)
+  {
+    trig = 2U;
+  }
+  if (trig >= (uint32_t)VCM_PWM_PERIOD)
+  {
+    trig = (uint32_t)VCM_PWM_PERIOD - 2U;
+  }
+  return (uint16_t)trig;
 }
 
-/* Both modes: sample-and-hold ends 1.5 µs before the next period edge. */
-static uint16_t VCM_AdcHoldCount(void)
+static void VCM_HRTIM_WriteAdcTrigs(uint16_t trig_a, uint16_t trig_b)
 {
-  return (uint16_t)(VCM_PWM_PERIOD - VCM_ADC_END_CNT);
+  uint16_t gap = VCM_ADC_TRIG_GAP;
+
+  if (gap < 2U)
+  {
+    gap = 2U;
+  }
+  if (trig_b < (uint16_t)(trig_a + gap))
+  {
+    trig_b = (uint16_t)(trig_a + gap);
+  }
+  if (trig_b > (uint16_t)(VCM_PWM_PERIOD - 2U))
+  {
+    trig_b = (uint16_t)(VCM_PWM_PERIOD - 2U);
+  }
+  if (((uint32_t)trig_a + (uint32_t)gap) > (uint32_t)trig_b)
+  {
+    if (trig_b > gap)
+    {
+      trig_a = (uint16_t)(trig_b - gap);
+    }
+    else
+    {
+      trig_a = 2U;
+    }
+  }
+  if (trig_a < 2U)
+  {
+    trig_a = 2U;
+  }
+  __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_COMPAREUNIT_2, trig_a);
+  __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_COMPAREUNIT_4, trig_b);
 }
 
-/* One ADCTRG1 edge: Timer A CMP2. Phase does not follow PWM edges. */
-static void VCM_HRTIM_SetAdcPhase(void)
+/* Two S&H windows inside one zero vector, split around its center.
+ * Bipolar has only the trailing coast; both triggers stay there so the
+ * two-deep DMA still completes once per period. */
+static void VCM_HRTIM_SetAdcPhase(uint16_t z0, uint16_t z1)
 {
-  __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_COMPAREUNIT_2,
-                         VCM_AdcTrigCount(VCM_AdcHoldCount()));
+  uint16_t trig = VCM_AdcTrigForZero(z0, z1);
+  uint16_t half = (uint16_t)(VCM_ADC_TRIG_GAP / 2U);
+  uint16_t t0 = (trig > half) ? (uint16_t)(trig - half) : 2U;
+  uint16_t t1 = (uint16_t)(trig + (uint16_t)(VCM_ADC_TRIG_GAP - half));
+
+  VCM_HRTIM_WriteAdcTrigs(t0, t1);
+}
+
+/* One S&H in each coast. CMP2 is the earlier coast, CMP4 the later one. */
+static void VCM_HRTIM_SetAdcPhasePair(uint16_t z0a, uint16_t z1a,
+                                      uint16_t z0b, uint16_t z1b)
+{
+  uint16_t t0 = VCM_AdcTrigForZero(z0a, z1a);
+  uint16_t t1 = VCM_AdcTrigForZero(z0b, z1b);
+  uint16_t swap;
+
+  if (t0 > t1)
+  {
+    swap = t0;
+    t0 = t1;
+    t1 = swap;
+  }
+  VCM_HRTIM_WriteAdcTrigs(t0, t1);
+}
+
+static void VCM_HRTIM_SetAdcPhaseIdle(void)
+{
+  VCM_HRTIM_SetAdcPhase((uint16_t)(VCM_PWM_PERIOD / 2U), VCM_PWM_PERIOD);
 }
 
 int VCM_AdcStart(void)
@@ -414,7 +785,16 @@ static void VCM_HRTIM_PulseWindow(uint32_t timer_idx, uint16_t start, uint16_t h
   __HAL_HRTIM_SETCOMPARE(&hhrtim, timer_idx, HRTIM_COMPAREUNIT_2, end);
 }
 
-/* HRTIM counts for the external gate-driver blanking. 200 ns → 96 counts. */
+/* High side stays off, so the complementary low side freewheels. */
+static void VCM_HRTIM_PulseOff(uint32_t timer_idx)
+{
+  HRTIM_Timerx_TypeDef *tim = &hhrtim.Instance->sTimerxRegs[timer_idx];
+
+  tim->SETx1R = 0U;
+  tim->RSTx1R = HRTIM_RST1R_PER | HRTIM_RST1R_SRT;
+}
+
+/* HRTIM counts for the external gate-driver blanking. 500 ns → 240 counts. */
 static uint16_t VCM_DrvDtCounts(void)
 {
   uint32_t ns = g_vcm.drv_dt_ns;
@@ -426,7 +806,7 @@ static uint16_t VCM_DrvDtCounts(void)
   return (uint16_t)((ns * (VCM_HRTIM_CLOCK_HZ / 1000000UL)) / 1000UL);
 }
 
-/* Keep the last sign through zero so the t_d pulse does not flip with noise. */
+/* Keep the last sign through zero so compensation does not flip with noise. */
 static int8_t VCM_DrvDtSign(float i_a)
 {
   if (i_a > VCM_DRV_DT_HOLD_A)
@@ -440,9 +820,16 @@ static int8_t VCM_DrvDtSign(float i_a)
   return vcm_dt_sign;
 }
 
+/* User bipolar stays bipolar. Tri-level stays tri-level. */
+static void VCM_SelectRunMode(float iref)
+{
+  (void)iref;
+  vcm_run_bip = (g_vcm.pwm_mode != VCM_PWM_MODE_TRILEVEL) ? 1U : 0U;
+}
+
 /*
- * Three-level dual-pulse in one period: +V (A) → coast → -V (B) → coast.
- * Both polarities always keep at least 1 us dither. Net Vcoil=(Da-Db)*Vbus=2*m*Vbus.
+ * Three-level: both pulses stay on in closed loop. m lengthens one side.
+ * UART Z (open-loop hold) leaves both off.
  * Bipolar 0.5+/-m only if pwm_mode is bipolar.
  */
 static void VCM_HRTIM_ApplyDuty(float m)
@@ -458,7 +845,6 @@ static void VCM_HRTIM_ApplyDuty(float m)
   float db_f;
   const uint16_t duty_min = 60U;
   const uint16_t duty_max = (uint16_t)(VCM_PWM_PERIOD - duty_min);
-  const uint16_t dither_cnt = (uint16_t)(VCM_TRI_DITHER_D * (float)VCM_PWM_PERIOD + 0.5f);
 
   if (m > VCM_MOD_MAX)
   {
@@ -478,32 +864,39 @@ static void VCM_HRTIM_ApplyDuty(float m)
     g_vcm.adc_active_valid = 1U;
     __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_COMPAREUNIT_1, cmp_a);
     __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_B, HRTIM_COMPAREUNIT_1, cmp_b);
-    VCM_HRTIM_SetAdcPhase();
+    VCM_HRTIM_SetAdcPhase(cmp_a, VCM_PWM_PERIOD);
     return;
   }
 
-  if (g_vcm.pwm_mode == VCM_PWM_MODE_TRILEVEL)
+  if (vcm_run_bip == 0U)
   {
-    /* Keep both dither pulses. m only lengthens one polarity (never drops the other). */
-    if (m >= 0.0f)
+    float dcm;
+    uint16_t dcm_cnt;
+    uint16_t coast_min = VCM_ADC_ZERO_MIN_CNT;
+    float m_dt = m;
+
+    dcm = (g_vcm.iref_hold_en != 0U) ? 0.0f : VCM_TriCmDuty();
+    dcm_cnt = (uint16_t)(dcm * (float)VCM_PWM_PERIOD + 0.5f);
+    /* Both pulses stay at least dcm. m lengthens one side. */
+    if (m_dt >= 0.0f)
     {
-      da_f = VCM_TRI_DITHER_D + (2.0f * m);
-      db_f = VCM_TRI_DITHER_D;
+      da_f = dcm + (2.0f * m_dt);
+      db_f = dcm;
     }
     else
     {
-      da_f = VCM_TRI_DITHER_D;
-      db_f = VCM_TRI_DITHER_D - (2.0f * m);
+      da_f = dcm;
+      db_f = dcm - (2.0f * m_dt);
     }
     cnt_a = (uint16_t)(da_f * (float)VCM_PWM_PERIOD + 0.5f);
     cnt_b = (uint16_t)(db_f * (float)VCM_PWM_PERIOD + 0.5f);
-    if (cnt_a < dither_cnt)
+    if (cnt_a < dcm_cnt)
     {
-      cnt_a = dither_cnt;
+      cnt_a = dcm_cnt;
     }
-    if (cnt_b < dither_cnt)
+    if (cnt_b < dcm_cnt)
     {
-      cnt_b = dither_cnt;
+      cnt_b = dcm_cnt;
     }
     if (cnt_a > duty_max)
     {
@@ -513,17 +906,18 @@ static void VCM_HRTIM_ApplyDuty(float m)
     {
       cnt_b = duty_max;
     }
-    if ((cnt_a + cnt_b) > (uint16_t)(VCM_PWM_PERIOD - (2U * duty_min)))
+    if ((uint32_t)cnt_a + (uint32_t)cnt_b >
+        (uint32_t)VCM_PWM_PERIOD - (2U * (uint32_t)coast_min))
     {
-      room = (uint16_t)(VCM_PWM_PERIOD - (2U * duty_min));
+      room = (uint16_t)(VCM_PWM_PERIOD - (2U * coast_min));
       if (cnt_a >= cnt_b)
       {
-        cnt_b = dither_cnt;
+        cnt_b = dcm_cnt;
         cnt_a = (uint16_t)(room - cnt_b);
       }
       else
       {
-        cnt_a = dither_cnt;
+        cnt_a = dcm_cnt;
         cnt_b = (uint16_t)(room - cnt_a);
       }
     }
@@ -536,14 +930,43 @@ static void VCM_HRTIM_ApplyDuty(float m)
     }
 
     VCM_HRTIM_InvalidateChop();
-    VCM_HRTIM_PulseStart(HRTIM_TIMERINDEX_TIMER_A, cnt_a);
-    VCM_HRTIM_PulseWindow(HRTIM_TIMERINDEX_TIMER_B, start_b, cnt_b);
+    if (cnt_a > 0U)
+    {
+      VCM_HRTIM_PulseStart(HRTIM_TIMERINDEX_TIMER_A, cnt_a);
+    }
+    else
+    {
+      VCM_HRTIM_PulseOff(HRTIM_TIMERINDEX_TIMER_A);
+    }
+    if (cnt_b > 0U)
+    {
+      VCM_HRTIM_PulseWindow(HRTIM_TIMERINDEX_TIMER_B, start_b, cnt_b);
+    }
+    else
+    {
+      VCM_HRTIM_PulseOff(HRTIM_TIMERINDEX_TIMER_B);
+    }
     g_vcm.adc_active_valid = 1U;
-    VCM_HRTIM_SetAdcPhase();
+    {
+      uint16_t z_hi0 = cnt_a;
+      uint16_t z_hi1 = start_b;
+      uint16_t z_lo0 = (uint16_t)(start_b + cnt_b);
+      uint16_t z_lo1 = VCM_PWM_PERIOD;
+
+      if (z_hi1 <= z_hi0)
+      {
+        z_hi1 = (uint16_t)(z_hi0 + 2U);
+      }
+      if (z_lo0 >= VCM_PWM_PERIOD)
+      {
+        z_lo0 = (uint16_t)(VCM_PWM_PERIOD - 2U);
+      }
+      VCM_HRTIM_SetAdcPhasePair(z_hi0, z_hi1, z_lo0, z_lo1);
+    }
     return;
   }
 
-  /* Leg difference = 2·m·T + sign(i)·t_d. m = 0 leaves a t_d pulse the driver eats. */
+  /* Leg difference = 2·m·T + sign(i)·dt. dt is the two-edge compensation. */
   {
     int32_t diff;
     int32_t half;
@@ -583,7 +1006,10 @@ static void VCM_HRTIM_ApplyDuty(float m)
   g_vcm.adc_active_valid = 1U;
   __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_COMPAREUNIT_1, cmp_a);
   __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_B, HRTIM_COMPAREUNIT_1, cmp_b);
-  VCM_HRTIM_SetAdcPhase();
+  {
+    uint16_t z0 = (cmp_a > cmp_b) ? cmp_a : cmp_b;
+    VCM_HRTIM_SetAdcPhase(z0, VCM_PWM_PERIOD);
+  }
 }
 
 static float VCM_DtCalAmp(uint8_t step)
@@ -611,7 +1037,7 @@ static void VCM_DtCalRestore(uint8_t use_result, uint16_t ns)
   g_vcm.iref_override_a = vcm_dt_saved_iref;
   g_vcm.drv_dt_ns = (use_result != 0U) ? ns : vcm_dt_saved_ns;
   vcm_dt_cal = 0U;
-  VCM_HRTIM_SetAdcPhase();
+  VCM_HRTIM_SetAdcPhaseIdle();
 }
 
 static void VCM_DtCalAbort(void)
@@ -979,14 +1405,24 @@ void VCM_CurrentLoop_IRQHandler(void)
 
   raw = vcm_adc1_dma[0];
   g_vcm.adc_ifb = raw;
-  i_samp = VCM_AdcToIfbAmpere(raw) - g_vcm.ifb_offset_a;
-  if (g_vcm.adc_pair_ok != 0U)
   {
-    g_vcm.ifb_raw_a = i_samp + g_vcm.ifb_offset_a;
-    g_vcm.ifb_a = i_samp;
-    g_vcm.ifb_avg_a = i_samp;
-    g_vcm.ifb_ip_a = i_samp;
-    g_vcm.ifb_im_a = i_samp;
+    float i0 = VCM_AdcToIfbAmpere(vcm_adc1_dma[0]) - g_vcm.ifb_offset_a;
+    float i1 = VCM_AdcToIfbAmpere(vcm_adc1_dma[1]) - g_vcm.ifb_offset_a;
+
+    /* dma[0] is the earlier coast, dma[1] the later one. */
+    if (g_vcm.adc_pair_ok != 0U)
+    {
+      i_samp = 0.5f * (i0 + i1);
+      g_vcm.ifb_raw_a = i_samp + g_vcm.ifb_offset_a;
+      g_vcm.ifb_a = i_samp;
+      g_vcm.ifb_avg_a = i_samp;
+      g_vcm.ifb_ip_a = i0;
+      g_vcm.ifb_im_a = i1;
+    }
+    else
+    {
+      i_samp = i0;
+    }
   }
 
   if (g_vcm.iref_override_en != 0U)
@@ -1042,6 +1478,8 @@ void VCM_CurrentLoop_IRQHandler(void)
     {
       VCM_Stop();
     }
+    /* Capture must keep recording while the bridge is off, or the host plot stays empty. */
+    VCM_CapPush();
     return;
   }
   if (vcm_en_off_samples != 0U)
@@ -1053,6 +1491,7 @@ void VCM_CurrentLoop_IRQHandler(void)
 
   if ((g_vcm.state != VCM_STATE_RUN) && (g_vcm.state != VCM_STATE_CALIB))
   {
+    VCM_CapPush();
     return;
   }
 
@@ -1066,6 +1505,7 @@ void VCM_CurrentLoop_IRQHandler(void)
       if (vcm_ocp_hits >= VCM_OCP_CONFIRM_SAMPLES)
       {
         VCM_EnterFault(2U);
+        VCM_CapPush();
         return;
       }
     }
@@ -1074,6 +1514,38 @@ void VCM_CurrentLoop_IRQHandler(void)
       vcm_ocp_hits = 0U;
     }
   }
+
+  /* Bipolar sample is the center of the trailing zero vector, where the
+   * current is flat at the ripple peak. Subtract half the inductive ramp
+   * to recover the period average. Last period's m is still in g_vcm.mod. */
+  if ((vcm_run_bip != 0U) &&
+      (g_vcm.pwm_armed != 0U) &&
+      (g_vcm.adc_pair_ok != 0U))
+  {
+    float vb = g_vcm.vbus_v;
+    float l = g_vcm.coil_l_h;
+    float half;
+
+    if (vb < 1.0f)
+    {
+      vb = 1.0f;
+    }
+    if (l < 1.0e-4f)
+    {
+      l = 1.0e-4f;
+    }
+    half = vb * VCM_Absf(g_vcm.mod) * VCM_PWM_TS_S / l;
+    if (g_vcm.mod < 0.0f)
+    {
+      half = -half;
+    }
+    i_samp -= half;
+    g_vcm.ifb_a = i_samp;
+    g_vcm.ifb_avg_a = i_samp;
+  }
+
+  /* Tri-level samples one coast after each pulse. Their mean is the
+   * period average, so no peak correction is applied. */
 
 #if VCM_ENABLE_CAL_EN
   if (g_vcm.state == VCM_STATE_CALIB)
@@ -1115,14 +1587,18 @@ void VCM_CurrentLoop_IRQHandler(void)
 #endif
 
   VCM_IobsUpdate(g_vcm.ifb_avg_a, g_vcm.adc_pair_ok);
+  VCM_SelectRunMode(g_vcm.iref_a);
   {
+    float ref = VCM_IfbNotch(g_vcm.iref_a);
     float fdbk = (g_vcm.pi_fdbk == VCM_PI_FDBK_AVG) ? g_vcm.ifb_avg_a
                                                     : g_vcm.ifb_hat_a;
-    m = VCM_PiStep(g_vcm.iref_a, fdbk);
+
+    m = VCM_PiStep(ref, fdbk);
   }
   g_vcm.mod = m;
   VCM_HRTIM_ApplyDuty(m);
   VCM_DtCalSample();
+  VCM_CapPush();
 }
 
 void VCM_Init(void)
@@ -1159,6 +1635,13 @@ void VCM_Init(void)
   g_vcm.coil_r_ohm = VCM_COIL_R_OHM;
   g_vcm.pi_fdbk = VCM_PI_FDBK_DEFAULT;
   g_vcm.drv_dt_ns = VCM_DRV_DT_NS;
+  g_vcm.notch_hz[0] = 0U;
+  g_vcm.notch_hz[1] = 0U;
+  g_vcm.notch_hz[2] = 0U;
+  g_vcm.notch_hz[3] = 0U;
+  g_vcm.gz_en = VCM_GZ_EN_DEFAULT;
+  g_vcm.gz_scale = VCM_GZ_SCALE_DEFAULT;
+  g_vcm.gz_hold = 0U;
   (void)VCM_NvLoad();
   g_vcm.state = VCM_STATE_IDLE;
   g_vcm.fault_flags = 0U;
@@ -1196,6 +1679,44 @@ void VCM_Init(void)
   VCM_HRTIM_ApplyDuty(0.0f);
 }
 
+/* Capture TX holds the main loop for a whole line. The 1-byte RX register
+ * overruns in that time, so "$U stop" never arrived and capture kept going. */
+#define VCM_UART_RXQ 128U
+static uint8_t vcm_uart_rxq[VCM_UART_RXQ];
+static uint16_t vcm_uart_rx_w;
+static uint16_t vcm_uart_rx_r;
+
+static void VCM_UartRxPull(void)
+{
+  while (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_RXNE) != 0U)
+  {
+    uint8_t b = (uint8_t)(huart1.Instance->RDR & 0xFFU);
+    uint16_t next = (uint16_t)((vcm_uart_rx_w + 1U) % VCM_UART_RXQ);
+
+    if (next != vcm_uart_rx_r)
+    {
+      vcm_uart_rxq[vcm_uart_rx_w] = b;
+      vcm_uart_rx_w = next;
+    }
+  }
+  if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_ORE) != 0U)
+  {
+    __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_OREF);
+  }
+}
+
+uint8_t VCM_UartRxPop(uint8_t *out)
+{
+  VCM_UartRxPull();
+  if (vcm_uart_rx_r == vcm_uart_rx_w)
+  {
+    return 0U;
+  }
+  *out = vcm_uart_rxq[vcm_uart_rx_r];
+  vcm_uart_rx_r = (uint16_t)((vcm_uart_rx_r + 1U) % VCM_UART_RXQ);
+  return 1U;
+}
+
 static void VCM_UartWrite(const char *s)
 {
   while (*s != '\0')
@@ -1203,6 +1724,7 @@ static void VCM_UartWrite(const char *s)
     uint32_t spins = 2000000U;
     while (((huart1.Instance->ISR & USART_ISR_TXE_TXFNF) == 0U) && (spins > 0U))
     {
+      VCM_UartRxPull();
       spins--;
     }
     if (spins == 0U)
@@ -1220,6 +1742,7 @@ static void VCM_UartFlush(void)
 
   while (((huart1.Instance->ISR & USART_ISR_TC) == 0U) && (spins > 0U))
   {
+    VCM_UartRxPull();
     spins--;
   }
 }
@@ -1337,6 +1860,10 @@ static void VCM_HostTelem(void)
   VCM_UartWriteMilli(g_vcm.iref_lpf_a);
   VCM_UartWrite(" fdbk=");
   VCM_UartWriteI32((int32_t)g_vcm.pi_fdbk);
+  VCM_UartWrite(" gz=");
+  VCM_UartWriteI32((int32_t)g_vcm.gz_en);
+  VCM_UartWrite(" gzh=");
+  VCM_UartWriteI32((int32_t)g_vcm.gz_hold);
   VCM_UartWrite(" ov=");
   VCM_UartWriteI32((int32_t)g_vcm.iref_override_en);
   VCM_UartWrite(" hold=");
@@ -1406,6 +1933,18 @@ static void VCM_HostDump(void)
   VCM_UartWriteI32((int32_t)g_vcm.pi_fdbk);
   VCM_UartWrite(" dt_ns=");
   VCM_UartWriteI32((int32_t)g_vcm.drv_dt_ns);
+  VCM_UartWrite(" n0=");
+  VCM_UartWriteI32((int32_t)g_vcm.notch_hz[0]);
+  VCM_UartWrite(" n1=");
+  VCM_UartWriteI32((int32_t)g_vcm.notch_hz[1]);
+  VCM_UartWrite(" n2=");
+  VCM_UartWriteI32((int32_t)g_vcm.notch_hz[2]);
+  VCM_UartWrite(" n3=");
+  VCM_UartWriteI32((int32_t)g_vcm.notch_hz[3]);
+  VCM_UartWrite(" gz=");
+  VCM_UartWriteI32((int32_t)g_vcm.gz_en);
+  VCM_UartWrite(" gs_e3=");
+  VCM_UartWriteMilli(g_vcm.gz_scale);
   VCM_UartWrite(" mode=");
   VCM_UartWriteI32((int32_t)g_vcm.pwm_mode);
   VCM_UartWrite(" cal_ma=");
@@ -1521,6 +2060,35 @@ static void VCM_HostSet(const char *p, const char *end)
       g_vcm.drv_dt_ns = (uint16_t)v;
       nset++;
     }
+    else if ((klen == 2U) && (key[0] == 'n') &&
+             (key[1] >= '0') && (key[1] <= '3'))
+    {
+      uint8_t idx = (uint8_t)(key[1] - '0');
+      if (v < 0)
+      {
+        v = 0;
+      }
+      if ((v > 0) && (v < 50))
+      {
+        v = 50;
+      }
+      if (v > 10000)
+      {
+        v = 10000;
+      }
+      g_vcm.notch_hz[idx] = (uint16_t)v;
+      nset++;
+    }
+    else if ((klen == 2U) && (key[0] == 'g') && (key[1] == 'z'))
+    {
+      g_vcm.gz_en = (v != 0) ? 1U : 0U;
+      nset++;
+    }
+    else if ((klen == 2U) && (key[0] == 'g') && (key[1] == 's'))
+    {
+      g_vcm.gz_scale = VCM_Clampf((float)v * 0.001f, 0.05f, 1.0f);
+      nset++;
+    }
     else if ((klen == 4U) && (key[0] == 'i') && (key[1] == 'r') &&
              (key[2] == 'e') && (key[3] == 'f'))
     {
@@ -1535,6 +2103,36 @@ static void VCM_HostSet(const char *p, const char *end)
   }
 
   VCM_UartWrite((nset != 0U) ? "OK\r\n" : "ERR\r\n");
+}
+
+/* PLL2Q = 96 MHz, oversampling 16. Highest legal rate is fck/16 = 6000000. */
+static int VCM_BaudAllowed(uint32_t baud)
+{
+  return (baud == 115200U) || (baud == 230400U) || (baud == 460800U) ||
+         (baud == 921600U) || (baud == 1500000U) || (baud == 2000000U) ||
+         (baud == 3000000U) || (baud == 6000000U);
+}
+
+static int VCM_UartApplyBaud(uint32_t baud)
+{
+  if (VCM_BaudAllowed(baud) == 0)
+  {
+    return -1;
+  }
+  VCM_UartWrite("BAUD ");
+  VCM_UartWriteI32((int32_t)baud);
+  VCM_UartWrite("\r\n");
+  VCM_UartFlush();
+  if (huart1.Init.BaudRate == baud)
+  {
+    return 0;
+  }
+  huart1.Init.BaudRate = baud;
+  if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
+    return -1;
+  }
+  return 0;
 }
 
 static void VCM_HostLine(char *line, uint16_t n)
@@ -1611,6 +2209,47 @@ static void VCM_HostLine(char *line, uint16_t n)
     VCM_UartWrite((err == 0) ? "NV LOAD\r\n" : "NV EMPTY\r\n");
     return;
   }
+  if (cmd == 'Q')
+  {
+    int32_t baud = VCM_ParseI32(&p, end);
+    if (VCM_UartApplyBaud((uint32_t)baud) != 0)
+    {
+      VCM_UartWrite("ERR\r\n");
+    }
+    return;
+  }
+  if (cmd == 'U')
+  {
+    if (((uint32_t)(end - p) >= 4U) && (p[0] == 's') && (p[1] == 't') &&
+        (p[2] == 'o') && (p[3] == 'p'))
+    {
+      const char *s = p;
+      uint32_t id = 0U;
+      uint8_t have = 0U;
+
+      /* A stop queued behind a newer $U id= must not cancel that capture. */
+      while (s < end)
+      {
+        if (((uint32_t)(end - s) >= 3U) && (s[0] == 'i') && (s[1] == 'd') && (s[2] == '='))
+        {
+          s += 3;
+          id = (uint32_t)VCM_ParseI32(&s, end);
+          have = 1U;
+          break;
+        }
+        s++;
+      }
+      if ((have == 0U) || (id == vcm_cap_id))
+      {
+        VCM_CapStop();
+      }
+    }
+    else
+    {
+      VCM_CapArm(p, end);
+    }
+    return;
+  }
   if (cmd == 'K')
   {
     uint8_t s;
@@ -1644,7 +2283,7 @@ static void VCM_HostLine(char *line, uint16_t n)
     g_vcm.iref_override_en = 1U;
     g_vcm.iref_override_a = VCM_DtCalAmp(0U);
     vcm_dt_cal = 1U;
-    VCM_HRTIM_SetAdcPhase();
+    VCM_HRTIM_SetAdcPhaseIdle();
     VCM_UartWrite("DT BUSY\r\n");
     return;
   }
@@ -1659,10 +2298,286 @@ static void VCM_HostLine(char *line, uint16_t n)
   VCM_UartWrite("\r\n");
 }
 
+static int16_t VCM_CapMilli(float a)
+{
+  int32_t ma = (int32_t)((a * 1000.0f) + ((a >= 0.0f) ? 0.5f : -0.5f));
+
+  if (ma > 32767)
+  {
+    ma = 32767;
+  }
+  if (ma < -32767)
+  {
+    ma = -32767;
+  }
+  return (int16_t)ma;
+}
+
+/* Continuous rate that the current 8N1 link can carry, both currents, no drops. */
+static uint32_t VCM_CapContMaxHz(void)
+{
+  uint32_t baud = huart1.Init.BaudRate;
+  uint32_t bytes_per_s;
+  uint32_t lines;
+  uint32_t hz;
+
+  if (baud < 10U)
+  {
+    baud = 10U;
+  }
+  bytes_per_s = baud / 10U;
+  lines = bytes_per_s / VCM_CAP_LINE_BYTES;
+  if (lines < 1U)
+  {
+    lines = 1U;
+  }
+  hz = lines * VCM_CAP_PAIRS_LINE;
+  if (hz > VCM_CTRL_FREQ_HZ)
+  {
+    hz = VCM_CTRL_FREQ_HZ;
+  }
+  return hz;
+}
+
+/* One control tick. Stores iref and ifb; UART drain stays in the main loop. */
+static void VCM_CapPush(void)
+{
+  uint32_t wr;
+  uint32_t slot;
+  int16_t iref;
+  int16_t ifb;
+
+  if (vcm_cap_run == 0U)
+  {
+    return;
+  }
+  vcm_cap_div_cnt++;
+  if (vcm_cap_div_cnt < vcm_cap_div)
+  {
+    return;
+  }
+  vcm_cap_div_cnt = 0U;
+  iref = VCM_CapMilli(g_vcm.iref_a);
+  ifb = VCM_CapMilli(g_vcm.ifb_avg_a);
+  if (vcm_cap_mode == 0U)
+  {
+    wr = vcm_cap_wr;
+    if (wr < vcm_cap_n)
+    {
+      vcm_cap_buf[wr * 2U] = iref;
+      vcm_cap_buf[(wr * 2U) + 1U] = ifb;
+      wr++;
+      vcm_cap_wr = wr;
+    }
+    if (wr >= vcm_cap_n)
+    {
+      vcm_cap_run = 0U;
+      vcm_cap_done = 1U;
+    }
+    return;
+  }
+  slot = vcm_cap_wr % VCM_CAP_SAMPLES;
+  vcm_cap_buf[slot * 2U] = iref;
+  vcm_cap_buf[(slot * 2U) + 1U] = ifb;
+  vcm_cap_wr++;
+}
+
+static void VCM_CapPoll(void)
+{
+  uint32_t rd;
+  uint32_t wr;
+  uint32_t nsend;
+  uint32_t i;
+
+  wr = vcm_cap_wr;
+  rd = vcm_cap_rd;
+  if ((vcm_cap_mode != 0U) && ((wr - rd) > VCM_CAP_SAMPLES))
+  {
+    vcm_cap_ovf += (wr - rd) - VCM_CAP_SAMPLES;
+    rd = wr - VCM_CAP_SAMPLES;
+    vcm_cap_rd = rd;
+  }
+  if (rd == wr)
+  {
+    if (vcm_cap_done != 0U)
+    {
+      vcm_cap_done = 0U;
+      VCM_UartWrite("CAP DONE id=");
+      VCM_UartWriteI32((int32_t)vcm_cap_id);
+      VCM_UartWrite(" n=");
+      VCM_UartWriteI32((int32_t)vcm_cap_n);
+      VCM_UartWrite(" ovf=0\r\n");
+    }
+    return;
+  }
+  nsend = wr - rd;
+  if (nsend > VCM_CAP_PAIRS_LINE)
+  {
+    nsend = VCM_CAP_PAIRS_LINE;
+  }
+  VCM_UartWrite("CAP d=");
+  for (i = 0U; i < nsend; i++)
+  {
+    uint32_t slot = (vcm_cap_mode == 0U) ? (rd + i) : ((rd + i) % VCM_CAP_SAMPLES);
+    int16_t iref = vcm_cap_buf[slot * 2U];
+    int16_t ifb = vcm_cap_buf[(slot * 2U) + 1U];
+
+    if (i != 0U)
+    {
+      VCM_UartWrite(",");
+    }
+    VCM_UartWriteI32((int32_t)iref);
+    VCM_UartWrite(",");
+    VCM_UartWriteI32((int32_t)ifb);
+  }
+  VCM_UartWrite("\r\n");
+  vcm_cap_rd = rd + nsend;
+}
+
+static void VCM_CapArm(const char *p, const char *end)
+{
+  uint32_t hz = 1000U;
+  uint32_t mode = 0U;
+  uint32_t n = 4096U;
+  uint32_t div;
+  uint32_t cap_id = 0U;
+  uint8_t have_id = 0U;
+  const char *k;
+
+  while (p < end)
+  {
+    while ((p < end) && ((*p == ' ') || (*p == '\t')))
+    {
+      p++;
+    }
+    if (p >= end)
+    {
+      break;
+    }
+    k = p;
+    while ((p < end) && (*p != '=') && (*p != ' '))
+    {
+      p++;
+    }
+    if ((p < end) && (*p == '='))
+    {
+      uint32_t klen = (uint32_t)(p - k);
+      int32_t v;
+      p++;
+      v = VCM_ParseI32(&p, end);
+      if (v < 0)
+      {
+        v = 0;
+      }
+      if ((klen == 2U) && (k[0] == 'h') && (k[1] == 'z'))
+      {
+        hz = (uint32_t)v;
+      }
+      else if ((klen == 2U) && (k[0] == 'i') && (k[1] == 'd'))
+      {
+        cap_id = (uint32_t)v;
+        have_id = 1U;
+      }
+      else if ((klen == 4U) && (k[0] == 'm'))
+      {
+        mode = (v != 0) ? 1U : 0U;
+      }
+      else if ((klen == 1U) && (k[0] == 'n'))
+      {
+        n = (uint32_t)v;
+      }
+    }
+    else
+    {
+      break;
+    }
+  }
+  if (hz < 1U)
+  {
+    hz = 1U;
+  }
+  if (hz > VCM_CTRL_FREQ_HZ)
+  {
+    hz = VCM_CTRL_FREQ_HZ;
+  }
+  if ((mode != 0U) && (hz > VCM_CapContMaxHz()))
+  {
+    hz = VCM_CapContMaxHz();
+  }
+  div = (VCM_CTRL_FREQ_HZ + (hz / 2U)) / hz;
+  if (div < 1U)
+  {
+    div = 1U;
+  }
+  if (div > VCM_CTRL_FREQ_HZ)
+  {
+    div = VCM_CTRL_FREQ_HZ;
+  }
+  hz = VCM_CTRL_FREQ_HZ / div;
+  if (mode != 0U)
+  {
+    while ((hz > VCM_CapContMaxHz()) && (div < VCM_CTRL_FREQ_HZ))
+    {
+      div++;
+      hz = VCM_CTRL_FREQ_HZ / div;
+    }
+  }
+  if (n < 1U)
+  {
+    n = 1U;
+  }
+  if (n > VCM_CAP_SAMPLES)
+  {
+    n = VCM_CAP_SAMPLES;
+  }
+  vcm_cap_run = 0U;
+  vcm_cap_done = 0U;
+  vcm_cap_div_cnt = 0U;
+  vcm_cap_wr = 0U;
+  vcm_cap_rd = 0U;
+  vcm_cap_ovf = 0U;
+  vcm_cap_div = div;
+  vcm_cap_hz = hz;
+  vcm_cap_n = n;
+  vcm_cap_mode = (uint8_t)mode;
+  if (have_id != 0U)
+  {
+    vcm_cap_id = cap_id;
+  }
+  vcm_cap_run = 1U;
+  VCM_UartWrite("CAP ARM id=");
+  VCM_UartWriteI32((int32_t)vcm_cap_id);
+  VCM_UartWrite(" hz=");
+  VCM_UartWriteI32((int32_t)hz);
+  VCM_UartWrite(" mode=");
+  VCM_UartWriteI32((int32_t)mode);
+  VCM_UartWrite(" n=");
+  VCM_UartWriteI32((int32_t)n);
+  VCM_UartWrite("\r\n");
+}
+
+static void VCM_CapStop(void)
+{
+  uint32_t ovf;
+
+  vcm_cap_run = 0U;
+  vcm_cap_done = 0U;
+  ovf = vcm_cap_ovf;
+  vcm_cap_wr = 0U;
+  vcm_cap_rd = 0U;
+  VCM_UartWrite("CAP STOP id=");
+  VCM_UartWriteI32((int32_t)vcm_cap_id);
+  VCM_UartWrite(" ovf=");
+  VCM_UartWriteI32((int32_t)ovf);
+  VCM_UartWrite("\r\n");
+}
+
 /* $W/$E set vcm_nv_req from the UART parser. Erase runs here, in the main loop. */
 void VCM_NvPoll(void)
 {
   uint8_t req = vcm_nv_req;
+
+  VCM_CapPoll();
   uint8_t dt_msg = vcm_dt_msg;
   int err;
 
@@ -1846,7 +2761,7 @@ uint8_t VCM_ServiceUartCmd(uint8_t cmd)
   {
     g_vcm.pwm_mode = VCM_PWM_MODE_BIPOLAR;
     vcm_tri_sign = 0;
-    VCM_HRTIM_SetAdcPhase();
+    VCM_HRTIM_SetAdcPhaseIdle();
     VCM_UartWrite("PWM BIPOLAR\r\n");
     return 1U;
   }
@@ -1854,7 +2769,7 @@ uint8_t VCM_ServiceUartCmd(uint8_t cmd)
   {
     g_vcm.pwm_mode = VCM_PWM_MODE_TRILEVEL;
     vcm_tri_sign = 0;
-    VCM_HRTIM_SetAdcPhase();
+    VCM_HRTIM_SetAdcPhaseIdle();
     VCM_UartWrite("PWM TRILEVEL\r\n");
     return 1U;
   }
@@ -1914,10 +2829,11 @@ static void VCM_ConfigHalfBridge(uint32_t timer_idx, uint32_t output1, uint32_t 
     Error_Handler();
   }
 
-  /* Timer A CMP2 = ADC, 1.5 µs before period end. Timer B CMP2 = −pulse edge. */
+  /* Timer A CMP2 and CMP4 are the two ADC triggers. Timer B CMP2 = −pulse end. */
   if (timer_idx == HRTIM_TIMERINDEX_TIMER_A)
   {
-    pCompareCfg.CompareValue = VCM_AdcTrigCount(VCM_AdcHoldCount());
+    pCompareCfg.CompareValue = VCM_AdcTrigForZero((uint16_t)(VCM_PWM_PERIOD / 2U),
+                                                 VCM_PWM_PERIOD);
   }
   else
   {
@@ -2027,7 +2943,8 @@ void VCM_HRTIM_InitTimers(void)
   VCM_ConfigHalfBridge(HRTIM_TIMERINDEX_TIMER_B, HRTIM_OUTPUT_TB1, HRTIM_OUTPUT_TB2);
 
   adc_trig.UpdateSource = HRTIM_ADCTRIGGERUPDATE_TIMER_A;
-  adc_trig.Trigger = HRTIM_ADCTRIGGEREVENT13_TIMERA_CMP2;
+  adc_trig.Trigger = HRTIM_ADCTRIGGEREVENT13_TIMERA_CMP2 |
+                     HRTIM_ADCTRIGGEREVENT13_TIMERA_CMP4;
   if (HAL_HRTIM_ADCTriggerConfig(&hhrtim, HRTIM_ADCTRIGGER_1, &adc_trig) != HAL_OK)
   {
     Error_Handler();

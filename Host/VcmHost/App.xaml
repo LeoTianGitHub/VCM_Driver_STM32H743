@@ -71,13 +71,23 @@
                                               Margin="10,4,28,4"
                                               VerticalAlignment="Center"
                                               HorizontalAlignment="Left"
-                                              RecognizesAccessKey="True">
+                                              RecognizesAccessKey="True"
+                                              TextElement.Foreground="{StaticResource TextBrush}">
                                 <ContentPresenter.Resources>
                                     <Style TargetType="TextBlock">
-                                        <Setter Property="Foreground" Value="White"/>
+                                        <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
                                     </Style>
                                 </ContentPresenter.Resources>
                             </ContentPresenter>
+                            <TextBox x:Name="PART_EditableTextBox"
+                                     Visibility="Hidden"
+                                     IsReadOnly="{TemplateBinding IsReadOnly}"
+                                     Background="Transparent"
+                                     Foreground="{StaticResource TextBrush}"
+                                     CaretBrush="{StaticResource TextBrush}"
+                                     BorderThickness="0"
+                                     Margin="8,2,26,2"
+                                     VerticalAlignment="Center"/>
                             <Popup x:Name="Popup" Placement="Bottom" AllowsTransparency="True"
                                    Focusable="False" IsOpen="{TemplateBinding IsDropDownOpen}"
                                    PopupAnimation="Slide">
@@ -94,8 +104,13 @@
                             </Popup>
                         </Grid>
                         <ControlTemplate.Triggers>
+                            <Trigger Property="IsEditable" Value="True">
+                                <Setter TargetName="PART_EditableTextBox" Property="Visibility" Value="Visible"/>
+                                <Setter TargetName="ContentSite" Property="Visibility" Value="Hidden"/>
+                            </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter Property="Foreground" Value="{StaticResource MuteBrush}"/>
+                                <Setter TargetName="PART_EditableTextBox" Property="Foreground" Value="{StaticResource MuteBrush}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -112,7 +127,13 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="ComboBoxItem">
                         <Border x:Name="Bd" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter VerticalAlignment="Center"/>
+                            <ContentPresenter VerticalAlignment="Center" TextElement.Foreground="{StaticResource TextBrush}">
+                                <ContentPresenter.Resources>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                                    </Style>
+                                </ContentPresenter.Resources>
+                            </ContentPresenter>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsHighlighted" Value="True">
@@ -135,7 +156,7 @@
         </Style>
         <Style TargetType="Button">
             <Setter Property="Padding" Value="12,6"/>
-            <Setter Property="Margin" Value="0,0,8,0"/>
+            <Setter Property="Margin" Value="0,0,8,6"/>
             <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
             <Setter Property="Background" Value="#FF2E3540"/>
             <Setter Property="BorderBrush" Value="{StaticResource LineBrush}"/>

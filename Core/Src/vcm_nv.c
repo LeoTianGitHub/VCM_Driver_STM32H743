@@ -20,8 +20,8 @@
 #include <stddef.h>
 #include <string.h>
 
-/* Fixed prefix is 14×uint32 = 56 B; rsv fills the rest of the 256 B image. */
-#define VCM_NV_FIXED_U32  14U
+/* Fixed prefix is 20×uint32 = 80 B; rsv fills the rest of the 256 B image. */
+#define VCM_NV_FIXED_U32  20U
 
 typedef struct
 {
@@ -39,6 +39,9 @@ typedef struct
   float coil_r_ohm;
   uint32_t pi_fdbk;
   uint32_t drv_dt_ns;
+  uint32_t notch_hz[4]; /* Hz, 0 = off. version >= 9 */
+  uint32_t gz_en;       /* 0 = one PI zone, 1 = standstill scale. version >= 10 */
+  float gz_scale;
   uint32_t rsv[(VCM_NV_BYTES / 4U) - VCM_NV_FIXED_U32];
 } VCM_Nv_t;
 
@@ -120,6 +123,15 @@ static void VCM_NvCapture(VCM_Nv_t *nv)
   nv->coil_r_ohm = g_vcm.coil_r_ohm;
   nv->pi_fdbk = (uint32_t)g_vcm.pi_fdbk;
   nv->drv_dt_ns = (uint32_t)g_vcm.drv_dt_ns;
+  {
+    uint32_t i;
+    for (i = 0U; i < 4U; i++)
+    {
+      nv->notch_hz[i] = (uint32_t)g_vcm.notch_hz[i];
+    }
+  }
+  nv->gz_en = (uint32_t)g_vcm.gz_en;
+  nv->gz_scale = g_vcm.gz_scale;
   nv->crc = VCM_NvCrcBytes((const uint8_t *)nv, sizeof(*nv));
 }
 
@@ -167,6 +179,29 @@ static void VCM_NvApply(const VCM_Nv_t *nv)
       ns = VCM_DRV_DT_NS_MAX;
     }
     g_vcm.drv_dt_ns = (uint16_t)ns;
+  }
+  if (nv->version >= 9U)
+  {
+    uint32_t i;
+    for (i = 0U; i < 4U; i++)
+    {
+      uint32_t hz = nv->notch_hz[i];
+      if (hz > 10000U)
+      {
+        hz = 10000U;
+      }
+      g_vcm.notch_hz[i] = (uint16_t)hz;
+    }
+  }
+  if (nv->version >= 10U)
+  {
+    float sc = nv->gz_scale;
+    g_vcm.gz_en = (nv->gz_en != 0U) ? 1U : 0U;
+    if ((sc < 0.05f) || (sc > 1.0f))
+    {
+      sc = VCM_GZ_SCALE_DEFAULT;
+    }
+    g_vcm.gz_scale = sc;
   }
 }
 
@@ -408,6 +443,13 @@ int VCM_NvFactory(void)
   g_vcm.pwm_mode = VCM_PWM_MODE;
   g_vcm.pi_fdbk = VCM_PI_FDBK_DEFAULT;
   g_vcm.drv_dt_ns = VCM_DRV_DT_NS;
+  g_vcm.notch_hz[0] = 0U;
+  g_vcm.notch_hz[1] = 0U;
+  g_vcm.notch_hz[2] = 0U;
+  g_vcm.notch_hz[3] = 0U;
+  g_vcm.gz_en = VCM_GZ_EN_DEFAULT;
+  g_vcm.gz_scale = VCM_GZ_SCALE_DEFAULT;
+  g_vcm.gz_hold = 0U;
 
   return err;
 }

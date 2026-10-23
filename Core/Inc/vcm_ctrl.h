@@ -61,7 +61,11 @@ typedef struct
   uint8_t iref_hold_en;       /* 1 = UART 'Z': PI off, equal dither */
   uint8_t pi_fdbk;            /* VCM_PI_FDBK_*: 0=ifb_avg 1=ifb_hat */
   uint8_t pwm_mode;           /* VCM_PWM_MODE_*; Live Expr / UART B|T */
-  uint16_t drv_dt_ns;         /* bipolar gate-driver compensation; 0 = off */
+  uint16_t drv_dt_ns;         /* dead-time compensation width, ns; 0 = off */
+  uint16_t notch_hz[4];       /* current-command notches, Hz; 0 = off */
+  float gz_scale;             /* standstill Kp/Ki scale, 0.05..1 */
+  uint8_t gz_en;              /* 0 = one zone, 1 = lower gain when command is quiet */
+  uint8_t gz_hold;            /* 1 = standstill scale is applied this period */
   uint32_t isr_ticks;
   uint32_t start_count;
   uint32_t stop_count;
@@ -102,6 +106,8 @@ float VCM_AdcToIrefAmpere(uint16_t raw);
 uint8_t VCM_ServiceUartCmd(uint8_t cmd);
 /** Byte from USART1: legacy G/F/Z/A/B/T or "$...\\n" host frames. */
 void VCM_ServiceUartByte(uint8_t b);
+/** Pop one USART1 byte. Also keeps bytes received while a capture line is transmitting. */
+uint8_t VCM_UartRxPop(uint8_t *out);
 /** Run deferred $W/$E Flash erase/program from main loop (not from the UART parser). */
 void VCM_NvPoll(void);
 

@@ -2,7 +2,7 @@
  * @file    vcm_config.h
  * @brief   VCM current loop - PI + R/L FF, three-level PWM @ 50 kHz
  *
- * Quiet profile: fc≈700 Hz << structure fn≈1720 Hz. Competitor-style short
+ * Structure resonance fn≈820 Hz. Competitor-style short
  * +/-Vbus pulses, rest of period Vcoil=0. PWM stays enabled (no idle clamp).
  */
 #ifndef VCM_CONFIG_H
@@ -23,12 +23,18 @@
 #define VCM_DT_RISING           0U
 #define VCM_DT_FALLING          0U
 
-/* Gate-driver blanking compensated in the bipolar leg difference only.
- * HRTIM dead-time registers stay 0 (they would stack on top of this).
- * $S dt=<ns>, 0 disables. Hold the last current sign below HOLD. */
-#define VCM_DRV_DT_NS              200U
+/* Bipolar compensation, two edges. $K measures this width.
+ * $S dt=<ns>, 0 disables it. HRTIM dead-time registers stay 0.
+ * Tri-level does not use this value. */
+#define VCM_DRV_DT_NS              400U
 #define VCM_DRV_DT_NS_MAX          1000U
 #define VCM_DRV_DT_HOLD_A          0.080f
+/* Both tri-level pulses stay at least this wide while the current loop
+ * is closed, including at zero command. 600 ns is above the 200 ns gate
+ * edge, so blanking cannot swallow either pulse. At 48 V the ripple is
+ * about 24 mA peak to peak. The command only lengthens one side.
+ * Open-loop hold (UART Z) keeps both pulses off. */
+#define VCM_TRI_CM_NS              600U
 /* $K: bipolar, t_d forced to 0, PI at ±0.2 A then ±0.6 A. Axis must be still. */
 #define VCM_DT_CAL_I1_A            0.20f
 #define VCM_DT_CAL_I2_A            0.60f
@@ -44,13 +50,11 @@
 #define VCM_PWM_MODE               VCM_PWM_MODE_TRILEVEL
 
 /*
- * Dual-pulse three-level, one period: +V pulse → coast → -V pulse → coast.
- * Both pulses always stay >= dither; m only lengthens one side.
- * Net Vcoil=(Da-Db)*Vbus=2*m*Vbus. Dither = 1 us (needed for small-I linearity).
+ * Three-level, one period: +V pulse, coast, -V pulse, coast.
+ * Closed loop keeps both pulses at least VCM_TRI_CM_NS. The current
+ * command lengthens one side, so the average voltage is 2*m*Vbus and
+ * there is no step at zero. Feedback is the mean of the two coast samples.
  */
-#define VCM_TRI_PULSE_NS           1000U
-#define VCM_TRI_DITHER_D           ((float)VCM_TRI_PULSE_NS * 1.0e-9f * \
-                                 (float)VCM_PWM_FREQ_HZ) /* 0.050 @ 50 kHz */
 
 #define VCM_I_MAX_A             10.0f
 #define VCM_I_OCP_A             12.0f
@@ -78,15 +82,27 @@
 #define VCM_IREF_POLARITY       (-1.0f)
 
 /* Single-zone PI @ 50 kHz: fc≈1.5 kHz (zero ~320 Hz).
- * Default feedback is observer î; host $S fdbk=0 uses raw 2-pt IFB. */
+ * Default feedback is the 2-point IFB average. Host $S fdbk=1 uses î. */
 #define VCM_KP                  0.12f
 #define VCM_KI                  240.0f
 #define VCM_I_INTEGRAL_LIM      0.30f
 
+/* Two-zone PI. Motion uses Kp/Ki. After the current command has been
+ * quiet for ENTER, both gains scale by GZ_SCALE. Exit on command slope
+ * only — not on current magnitude or current error. The integrator is
+ * shifted by (s0-s1)*Kp*e so modulation does not step. */
+#define VCM_GZ_EN_DEFAULT          0U
+#define VCM_GZ_SCALE_DEFAULT       0.35f
+#define VCM_GZ_REF_A               0.0004f   /* command LPF, τ≈50 ms @ 50 kHz */
+#define VCM_GZ_ENTER_A_S           8.0f      /* slow-command slope, A/s */
+#define VCM_GZ_EXIT_A_S            40.0f
+#define VCM_GZ_ENTER_TICKS         2000U     /* 40 ms @ 50 kHz */
+#define VCM_GZ_EXIT_TICKS          100U      /* 2 ms @ 50 kHz */
+
 /* PI feedback: 0 = ifb_avg (direct), 1 = ifb_hat (observer). Host key fdbk=. */
 #define VCM_PI_FDBK_AVG         0U
 #define VCM_PI_FDBK_OBS         1U
-#define VCM_PI_FDBK_DEFAULT     VCM_PI_FDBK_OBS
+#define VCM_PI_FDBK_DEFAULT     VCM_PI_FDBK_AVG
 
 /* Plant FF: bipolar Vcoil ≈ 2·m·Vbus. L-FF off while tuning PI.
  * Live/UART override uses the same 1st-order as analog RC (C32/C33 =
@@ -96,8 +112,8 @@
 #define VCM_VBUS_V              48.0f
 #define VCM_VBUS_MIN_V          24.0f
 #define VCM_VBUS_MAX_V          48.0f
-/* Default R-FF tuned on bench (≈0.736× full ohmic). PlantSyncFf uses SCALE. */
-#define VCM_FF_MOD_PER_A        0.02792f
+/* R-FF default off. PlantSyncFf uses SCALE, so a Vbus/R change without ff= stays 0. */
+#define VCM_FF_MOD_PER_A        0.0f
 #define VCM_FF_SCALE            (VCM_FF_MOD_PER_A * (2.0f * VCM_VBUS_V) / \
                                  (VCM_COIL_R_OHM + VCM_IFB_RS_OHM))
 #define VCM_L_FF_SCALE          0.0f
@@ -106,9 +122,9 @@
 #define VCM_L_FF_DIDT_MAX       4000.0f
 
 /*
- * Current observer on the fixed-phase single IFB sample.
+ * Current observer on the period-average IFB.
  *   î ← î + (Ts/L)(2·m·Vbus − R·î) + α(ifb_avg − î)
- * Quiet: fo≈700 Hz (below fn), PI does not chase IFB aliases; HF from model.
+ * Quiet: fo≈700 Hz (below fn). HF comes from the voltage model.
  * Live @ 50 kHz: α 0.061≈500 Hz  0.084≈700 Hz  0.118≈1 kHz.
  */
 #define VCM_I_OBS_HZ            700.0f
@@ -139,16 +155,24 @@
 #define VCM_ADC_SMP_CYCLES         16.5f       /* CubeMX 16.5; S&H at end of this */
 #define VCM_ADC_SMP_DELAY          ((uint16_t)(VCM_ADC_SMP_CYCLES * \
                                  ((float)VCM_HRTIM_CLOCK_HZ / (float)VCM_ADC_KERNEL_HZ) + 0.5f)) /* 330 */
-/* Both modes: S&H ends END_NS before the next period edge. Trigger is
- * earlier by SMP_DELAY. 1.5 µs @ 50 kHz = 720 counts. Phase ignores edges.
- * Tri-level stays in the second coast while |m| < 0.375.
- * Bipolar stays in the both-LS coast while |m| < 0.425. */
-#define VCM_ADC_END_NS             1500U
-#define VCM_ADC_END_CNT            ((uint16_t)(((uint32_t)VCM_ADC_END_NS * \
-                                   (VCM_HRTIM_CLOCK_HZ / 1000000UL)) / 1000UL)) /* 720 */
-#define VCM_ADC_N                  1U     /* one IFB conversion per PWM period */
+/* S&H length at the ADC kernel clock. The window is centered in the zero
+ * vector after the active pulse, and the whole window stays >= 1 µs from
+ * both the previous edge and the next one. Phase follows the pulse width. */
+#define VCM_ADC_EDGE_GUARD_NS      1000U
+#define VCM_ADC_EDGE_GUARD_CNT     ((uint16_t)(((uint32_t)VCM_ADC_EDGE_GUARD_NS * \
+                                   (VCM_HRTIM_CLOCK_HZ / 1000000UL)) / 1000UL)) /* 480 */
+#define VCM_ADC_ZERO_MIN_CNT       ((uint16_t)(VCM_ADC_EDGE_GUARD_CNT + \
+                                   VCM_ADC_SMP_DELAY + VCM_ADC_EDGE_GUARD_CNT))
+/* Trailing zero must be at least ZERO_MIN. Bipolar later edge = T/2 + |m|·T. */
+#define VCM_BIP_MOD_MAX            (((0.5f * (float)VCM_PWM_PERIOD) - \
+                                   (float)VCM_ADC_ZERO_MIN_CNT) / (float)VCM_PWM_PERIOD)
+/* Tri-level second coast must leave two sample windows. The pulse floor
+ * and the zero-region width are applied in VCM_ModMax. */
+#define VCM_ADC_N                  2U     /* two IFB conversions per PWM period */
+/* Min time between the two ADC triggers so the first conversion finishes. */
+#define VCM_ADC_TRIG_GAP           VCM_ADC_CONV_GUARD
 
-/* ADCTRG1 = Timer A CMP2 only. DMA length 1. */
+/* ADCTRG1 = Timer A CMP2 | CMP4. DMA length 2, memory increment on. */
 
 /* Gain-cal: UART force current (clamp meter) and rolling mean window */
 #define VCM_CAL_FORCE_A            0.50f
@@ -184,19 +208,30 @@
 
 /* Host frames: "$" ... "\n" @ 115200. Avoid 0x05 / 0xA0 (IAP).
  *   $I  identify     $P  telemetry     $D  dump params
- *   $S kp=120 ki=240000 obs=84 lpf=838 ff=27920 vbus=48000 r=3620 l=1188 fdbk=1 dt=200
- *      (kp/obs/lpf/vbus/r ×1000, ki ×1000, ff ×1e6, l = µH, fdbk 0=IFB 1=î, dt = ns)
+ *   $S kp=120 ki=240000 obs=84 lpf=838 ff=0 vbus=48000 r=3620 l=1188 fdbk=0 dt=400 n0=0 n1=0 n2=0 n3=0 gz=0 gs=350
+ *      (kp/obs/lpf/vbus/r ×1000, ki ×1000, ff ×1e6, l = µH, fdbk 0=IFB 1=î,
+ *       dt = two-edge compensation ns, 0 = off,
+ *       n0..n3 = current-command notch Hz, 0 = off,
+ *       gz 0=one PI zone 1=standstill scale, gs = standstill scale ×1000)
  *   $R <mA>  IREF override (PI on)   $Z $A $F $B $T $C $G as lines too
  *   $K  measure bipolar gate-driver t_d and store it in RAM
+ *   $Q <baud>  switch USART1. Reply BAUD at the old rate, then retune.
+ *      115200, 230400, 460800, 921600, 1500000, 2000000, 3000000, 6000000.
+ *      6000000 is fck/16 with PLL2Q = 96 MHz and oversampling 16.
+ *   $U id=<n> hz=<Hz> mode=0|1 n=<count>   capture iref and ifb into RAM
+ *      mode 0 = one shot, mode 1 = continuous.
+ *      $U stop id=<n> ends that session only. A stop with no id still stops.
+ *      Hz is snapped to an integer divisor of the control rate.
+ *      Continuous Hz is capped by the live UART baud (8N1, both currents).
  *   $W  save RAM params to Bank2 Sector3   $L reload   $E factory erase
  *
  * Version in $I / $D: hw=<board> fw=<major>.<minor>.<patch>
  */
 #define VCM_HOST_PROTO          3U
-#define VCM_HOST_LINE_MAX       128U
+#define VCM_HOST_LINE_MAX       192U
 #define VCM_HW_VERSION          1U   /* PCB / hardware revision */
 #define VCM_FW_VERSION_MAJOR    1U
 #define VCM_FW_VERSION_MINOR    4U
-#define VCM_FW_VERSION_PATCH    23U
+#define VCM_FW_VERSION_PATCH    53U
 
 #endif /* VCM_CONFIG_H */

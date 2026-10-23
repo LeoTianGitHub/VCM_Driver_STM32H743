@@ -20,7 +20,7 @@ internal sealed class LoopParams
     public double Ki { get; set; }
 
     [JsonPropertyName("fdbk")]
-    public int Fdbk { get; set; } = 1;
+    public int Fdbk { get; set; } = 0;
 
     [JsonPropertyName("obs")]
     public double Obs { get; set; }
@@ -41,7 +41,25 @@ internal sealed class LoopParams
     public double LMh { get; set; }
 
     [JsonPropertyName("dt_ns")]
-    public int DtNs { get; set; } = 200;
+    public int DtNs { get; set; } = 400;
+
+    [JsonPropertyName("n0")]
+    public int N0 { get; set; }
+
+    [JsonPropertyName("n1")]
+    public int N1 { get; set; }
+
+    [JsonPropertyName("n2")]
+    public int N2 { get; set; }
+
+    [JsonPropertyName("n3")]
+    public int N3 { get; set; }
+
+    [JsonPropertyName("gz")]
+    public int Gz { get; set; }
+
+    [JsonPropertyName("gs")]
+    public double Gs { get; set; } = 0.35;
 
     [JsonPropertyName("note")]
     public string? Note { get; set; }

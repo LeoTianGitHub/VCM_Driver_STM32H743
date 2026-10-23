@@ -63,7 +63,8 @@ internal static class Protocol
 
     /* fdbk: 0 = PI on ifb_avg, 1 = PI on observer î */
     public static string SetLine(double kp, double ki, double obs, double lpf, double ff,
-        double vbus, double rOhm, double lHenry, int fdbk, int dtNs)
+        double vbus, double rOhm, double lHenry, int fdbk, int dtNs, int n0, int n1, int n2, int n3,
+        int gz, double gs)
     {
         var kpE3 = (int)Math.Round(kp * 1000.0);
         var kiE3 = (int)Math.Round(ki * 1000.0);
@@ -75,7 +76,10 @@ internal static class Protocol
         var lE6 = (int)Math.Round(lHenry * 1_000_000.0);
         var fb = fdbk != 0 ? 1 : 0;
         var dt = Math.Clamp(dtNs, 0, 1000);
-        return $"$S kp={kpE3} ki={kiE3} obs={obsE3} lpf={lpfE3} ff={ffE6} vbus={vbusE3} r={rE3} l={lE6} fdbk={fb} dt={dt}\n";
+        var zone = gz != 0 ? 1 : 0;
+        var gsE3 = (int)Math.Round(Math.Clamp(gs, 0.05, 1.0) * 1000.0);
+        int ClampHz(int hz) => hz <= 0 ? 0 : Math.Clamp(hz, 50, 10000);
+        return $"$S kp={kpE3} ki={kiE3} obs={obsE3} lpf={lpfE3} ff={ffE6} vbus={vbusE3} r={rE3} l={lE6} fdbk={fb} dt={dt} n0={ClampHz(n0)} n1={ClampHz(n1)} n2={ClampHz(n2)} n3={ClampHz(n3)} gz={zone} gs={gsE3}\n";
     }
 
     public static string IrefLine(double amps)
