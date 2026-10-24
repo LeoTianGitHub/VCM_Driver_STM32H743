@@ -26,7 +26,7 @@ static void VCM_ConfigHalfBridge(uint32_t timer_idx, uint32_t output1, uint32_t 
 static void VCM_FaultPin_Set(bool fault_active);
 static void VCM_LoopStateReset(void);
 static float VCM_Absf(float x);
-static float VCM_PiStep(float ref, float fdbk, float ts, uint8_t full_rate);
+static float VCM_PiStep(float ref, float fdbk_p, float fdbk_i, float ts, uint8_t full_rate);
 static void VCM_IobsUpdate(float ifb, uint8_t meas_ok);
 static void VCM_HRTIM_SetChop(uint32_t timer_idx, uint8_t chop);
 static void VCM_UartWrite(const char *s);
@@ -433,14 +433,16 @@ static float VCM_GainZoneScale(float ref, float err)
 }
 
 /*
- * m = Kp*e + Ki*∫e + R·I_ff + L·di/dt_ff
- * Idle clamp optional. Two-zone scale is applied in VCM_GainZoneScale.
- * Back-calculation anti-windup: excess modulation is subtracted from the
- * integrator, so a saturated accel does not dump extra voltage at arrival.
+ * m = Kp*e_p + Ki*∫e_i + R·I_ff + L·di/dt_ff
+ * Observer mode passes î as e_p and the sampled current as e_i, so the
+ * integrator can supply Ke·v while Kp stays off the 820 Hz sample.
+ * fdbk=0 passes the same sampled current for both.
+ * Back-calculation anti-windup uses the applied modulation.
  */
-static float VCM_PiStep(float ref, float fdbk, float ts, uint8_t full_rate)
+static float VCM_PiStep(float ref, float fdbk_p, float fdbk_i, float ts, uint8_t full_rate)
 {
-  float err;
+  float err_p;
+  float err_i;
   float m_ff;
   float m_unsat;
   float m;
@@ -518,10 +520,11 @@ static float VCM_PiStep(float ref, float fdbk, float ts, uint8_t full_rate)
   }
 #endif
 
-  err = ref - fdbk;
+  err_p = ref - fdbk_p;
+  err_i = ref - fdbk_i;
   if (full_rate != 0U)
   {
-    float zone = VCM_GainZoneScale(ref, err);
+    float zone = VCM_GainZoneScale(ref, err_p);
     kp = g_vcm.kp * zone;
     ki = g_vcm.ki * zone;
   }
@@ -562,7 +565,7 @@ static float VCM_PiStep(float ref, float fdbk, float ts, uint8_t full_rate)
   }
   g_vcm.mod_ff = m_ff;
 
-  m_unsat = (kp * err) + g_vcm.integral + m_ff;
+  m_unsat = (kp * err_p) + g_vcm.integral + m_ff;
   m_max = VCM_ModMax();
   if (m_unsat > m_max)
   {
@@ -577,7 +580,7 @@ static float VCM_PiStep(float ref, float fdbk, float ts, uint8_t full_rate)
     m = m_unsat;
   }
 
-  g_vcm.integral += (ki * err * ts) + (m - m_unsat);
+  g_vcm.integral += (ki * err_i * ts) + (m - m_unsat);
   if (g_vcm.integral > VCM_I_INTEGRAL_LIM)
   {
     g_vcm.integral = VCM_I_INTEGRAL_LIM;
@@ -1674,8 +1677,11 @@ void VCM_CurrentLoop_IRQHandler(void)
   VCM_SelectRunMode(g_vcm.iref_a);
   {
     float ref = VCM_IfbNotch(g_vcm.iref_a);
-    float fdbk = (g_vcm.pi_fdbk == VCM_PI_FDBK_AVG) ? g_vcm.ifb_avg_a
-                                                    : g_vcm.ifb_hat_a;
+    float fdbk_p = (g_vcm.pi_fdbk == VCM_PI_FDBK_AVG) ? g_vcm.ifb_avg_a
+                                                      : g_vcm.ifb_hat_a;
+    float fdbk_i = ((g_vcm.pi_fdbk == VCM_PI_FDBK_AVG) || (g_vcm.adc_pair_ok != 0U))
+                       ? g_vcm.ifb_avg_a
+                       : fdbk_p;
     float ts = (vcm_half_done != 0U) ? VCM_HALF_TS_S : VCM_PWM_TS_S;
 
     vcm_half_done = 0U;
@@ -1687,7 +1693,7 @@ void VCM_CurrentLoop_IRQHandler(void)
       vcm_base_avg = g_vcm.ifb_avg_a;
       vcm_base_ok = 1U;
     }
-    m = VCM_PiStep(ref, fdbk, ts, 1U);
+    m = VCM_PiStep(ref, fdbk_p, fdbk_i, ts, 1U);
   }
   g_vcm.mod = m;
   vcm_rep_closed = 1U;
@@ -1779,7 +1785,8 @@ void VCM_CurrentLoop_HalfIRQ(void)
   uint16_t start_b;
   uint16_t cnt_b;
   float i0;
-  float fdbk;
+  float fdbk_p;
+  float fdbk_i;
   float m;
   float m_ach;
   float m_back;
@@ -1825,18 +1832,19 @@ void VCM_CurrentLoop_HalfIRQ(void)
 
   __DSB();
   i0 = VCM_AdcToIfbAmpere(vcm_adc1_dma[0]) - g_vcm.ifb_offset_a;
+  fdbk_i = vcm_base_avg + (i0 - vcm_base_i0);
   if (g_vcm.pi_fdbk == VCM_PI_FDBK_AVG)
   {
-    fdbk = vcm_base_avg + (i0 - vcm_base_i0);
+    fdbk_p = fdbk_i;
   }
   else
   {
-    fdbk = g_vcm.ifb_hat_a + (i0 - vcm_base_i0);
+    fdbk_p = g_vcm.ifb_hat_a + (i0 - vcm_base_i0);
   }
 
   integ = g_vcm.integral;
   ff_saved = g_vcm.mod_ff;
-  m = VCM_PiStep(vcm_pi_ref, fdbk, VCM_HALF_TS_S, 0U);
+  m = VCM_PiStep(vcm_pi_ref, fdbk_p, fdbk_i, VCM_HALF_TS_S, 0U);
   if (VCM_TriSecondPulse(m, vcm_act_cnt_a, vcm_act_dcm, &start_b, &cnt_b) == 0U)
   {
     g_vcm.integral = integ;

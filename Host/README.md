@@ -11,7 +11,7 @@ dotnet run
 
 或 Visual Studio 打开 `Host/VcmHost/VcmHost.csproj`。
 
-**必须先烧录带 `$` 行协议的固件**（`VCM_HOST_PROTO 3`，`fw=1.4.54`）。送丝电机额定 **1 A**，线圈 **5.42 Ω / 912 µH**。App 链接在 `0x08020000`，需先有 Bootloader；IAP 升级只擦 Sector 1–2。旧固件只能识别单字节 `G F Z A B T`。
+**必须先烧录带 `$` 行协议的固件**（`VCM_HOST_PROTO 3`，`fw=1.4.57`）。送丝电机额定 **1 A**，线圈 **5.42 Ω / 912 µH**。App 链接在 `0x08020000`，需先有 Bootloader；IAP 升级只擦 Sector 1–2。旧固件只能识别单字节 `G F Z A B T`。
 
 不要在本机已连接时用串口助手占用同一 COM；不要发送 `0x05` / `0xA0`（会进 IAP）。
 
@@ -39,9 +39,9 @@ IAP 升级只擦 Sector 1–2，不会清掉参数。不要对 Sector3 做全片
 
 | 主机 | 从机 |
 |------|------|
-| `$I` | `ID … fw=1.4.56 pwm=50000`（可选两段 PI：静止时 Kp/Ki 同比例降低） |
+| `$I` | `ID … fw=1.4.57 pwm=50000`（可选两段 PI：静止时 Kp/Ki 同比例降低） |
 | `$P` | `TL iref_ma=… ihat_ma=… iavg_ma=… gz=0|1 gzh=0|1 …`（gzh=1 表示正在用静止比例） |
-| `$D` | `PR hw=1 fw=1.4.56 proto=3 … fdbk=1 dt_ns=… n0=… n1=… n2=… n3=… gz=0|1 gs_e3=… mode=0|1`（fdbk 0=IFB 1=î。编译默认 fdbk=1，观测 α=0.634≈8000 Hz，R-FF=0，n0–n3=0。gz 0=单段 1=两段，mode 0=双极性 1=三电平） |
+| `$D` | `PR hw=1 fw=1.4.57 proto=3 … fdbk=1 dt_ns=… n0=… n1=… n2=… n3=… gz=0|1 gs_e3=… mode=0|1`（fdbk 0=比例和积分都用采样电流；1=比例用观测电流、积分用采样电流。编译默认 fdbk=1，观测 α=0.634≈8000 Hz，R-FF=0，n0–n3=0。gz 0=单段 1=两段，mode 0=双极性 1=三电平） |
 | `$S kp=… ki=… obs=… lpf=… ff=… vbus=… r=… l=… fdbk=0|1 dt=<ns> n0=<Hz> n1=<Hz> n2=<Hz> n3=<Hz> gz=0|1 gs=<×1000>` | `OK` / `ERR`（vbus/r ×1000，l=µH；dt 为双极性两个沿的补偿 ns，默认 400，0 关闭，写入后立即生效。三电平不用这项，闭环时两边至少各 600 ns，指令只加长一边；开环保持时两边都关。n0–n3 为电流指令陷波 Hz，0 关闭；gs 为静止时 Kp/Ki 比例 ×1000，默认 350） |
 | `$R 500` | IREF 覆盖 0.500 A（PI 开，额定 ±1 A） |
 | `$K` | `DT BUSY`，结束后 `DT ns=… pos=… neg=…`。机构停住、驱动使能。失败为 `DT ERR run/abort/fit` |
