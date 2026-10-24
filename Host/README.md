@@ -39,10 +39,10 @@ IAP 升级只擦 Sector 1–2，不会清掉参数。不要对 Sector3 做全片
 
 | 主机 | 从机 |
 |------|------|
-| `$I` | `ID … fw=1.4.54 pwm=50000`（可选两段 PI：静止时 Kp/Ki 同比例降低） |
+| `$I` | `ID … fw=1.4.55 pwm=50000`（可选两段 PI：静止时 Kp/Ki 同比例降低） |
 | `$P` | `TL iref_ma=… ihat_ma=… iavg_ma=… gz=0|1 gzh=0|1 …`（gzh=1 表示正在用静止比例） |
-| `$D` | `PR hw=1 fw=1.4.54 proto=3 … fdbk=1 dt_ns=… n0=… n1=… n2=… n3=… gz=0|1 gs_e3=… mode=0|1`（fdbk 0=IFB 1=î。编译默认 fdbk=1，观测 α=0.634≈8000 Hz，R-FF=0，n0–n3=0。gz 0=单段 1=两段，mode 0=双极性 1=三电平） |
-| `$S kp=… ki=… obs=… lpf=… ff=… vbus=… r=… l=… fdbk=0|1 dt=<ns> n0=<Hz> n1=<Hz> n2=<Hz> n3=<Hz> gz=0|1 gs=<×1000>` | `OK` / `ERR`（vbus/r ×1000，l=µH；dt 为双极性两个沿的补偿 ns，默认 400，0 关闭，写入后立即生效。三电平闭环时两边至少各 600 ns，指令只加长一边；开环保持时两边都关。n0–n3 为电流指令陷波 Hz，0 关闭；gs 为静止时 Kp/Ki 比例 ×1000，默认 350） |
+| `$D` | `PR hw=1 fw=1.4.55 proto=3 … fdbk=1 dt_ns=… n0=… n1=… n2=… n3=… gz=0|1 gs_e3=… mode=0|1`（fdbk 0=IFB 1=î。编译默认 fdbk=1，观测 α=0.634≈8000 Hz，R-FF=0，n0–n3=0。gz 0=单段 1=两段，mode 0=双极性 1=三电平） |
+| `$S kp=… ki=… obs=… lpf=… ff=… vbus=… r=… l=… fdbk=0|1 dt=<ns> n0=<Hz> n1=<Hz> n2=<Hz> n3=<Hz> gz=0|1 gs=<×1000>` | `OK` / `ERR`（vbus/r ×1000，l=µH；dt 为两个沿的补偿 ns，默认 400，0 关闭，写入后立即生效。双极性用满这一个宽度。三电平只用其中一边，方向跟电流走，过零大约 1 ms 滑过去；闭环时两边至少各 600 ns，指令只加长一边；开环保持时两边都关。n0–n3 为电流指令陷波 Hz，0 关闭；gs 为静止时 Kp/Ki 比例 ×1000，默认 350） |
 | `$R 500` | IREF 覆盖 0.500 A（PI 开，额定 ±1 A） |
 | `$K` | `DT BUSY`，结束后 `DT ns=… pos=… neg=…`。机构停住、驱动使能。失败为 `DT ERR run/abort/fit` |
 | `$U id=<n> hz=<Hz> mode=0\|1 n=<点数>` | `CAP ARM id=…` 后 `CAP d=<iref_mA,ifb_mA,…>`。mode 0 单次，mode 1 连续且频率不超过当前波特率能收完的上限。`$U stop id=<n>` 只停止这一次；旧的停止不会取消新的采集 |

@@ -23,12 +23,17 @@
 #define VCM_DT_RISING           0U
 #define VCM_DT_FALLING          0U
 
-/* Bipolar compensation, two edges. $K measures this width.
- * $S dt=<ns>, 0 disables it. HRTIM dead-time registers stay 0.
- * Tri-level does not use this value. */
+/* Bipolar compensation is this width, two edges. $K measures it.
+ * Tri-level adds one edge (half of this) along the current and slews
+ * the sign from +1 to -1 in VCM_TRI_DT_SLEW_S. $S dt=<ns>, 0 disables
+ * both. HRTIM dead-time registers stay 0. */
 #define VCM_DRV_DT_NS              400U
 #define VCM_DRV_DT_NS_MAX          1000U
 #define VCM_DRV_DT_HOLD_A          0.080f
+#define VCM_TRI_DT_SLEW_S          0.001f
+/* Second current-loop step, applied to the −pulse of the same period.
+ * The 50 kHz tick (notch, gain zone, capture, diag) stays on VCM_PWM_TS_S. */
+#define VCM_HALF_TS_S              (VCM_PWM_TS_S * 0.5f)
 /* Both tri-level pulses stay at least this wide while the current loop
  * is closed, including at zero command. 600 ns is above the 200 ns gate
  * edge, so blanking cannot swallow either pulse. At 48 V the ripple is
@@ -52,8 +57,11 @@
 /*
  * Three-level, one period: +V pulse, coast, -V pulse, coast.
  * Closed loop keeps both pulses at least VCM_TRI_CM_NS. The current
- * command lengthens one side, so the average voltage is 2*m*Vbus and
- * there is no step at zero. Feedback is the mean of the two coast samples.
+ * command lengthens one side, so the average voltage is 2*m*Vbus.
+ * One-edge dead-time compensation is added on top and slewed through zero.
+ * After the first coast sample, the −pulse is recomputed with VCM_HALF_TS_S
+ * if that edge has not yet started. Feedback for the 50 kHz step is the
+ * mean of the two coast samples.
  */
 
 #define VCM_I_MAX_A             1.0f
@@ -210,7 +218,7 @@
  *   $I  identify     $P  telemetry     $D  dump params
  *   $S kp=300 ki=60000 obs=634 lpf=838 ff=0 vbus=48000 r=5420 l=912 fdbk=1 dt=400 n0=0 n1=0 n2=0 n3=0 gz=0 gs=350
  *      (kp/obs/lpf/vbus/r ×1000, ki ×1000, ff ×1e6, l = µH, fdbk 0=IFB 1=î,
- *       dt = two-edge compensation ns, 0 = off,
+ *       dt = two-edge compensation ns (tri-level uses one edge), 0 = off,
  *       n0..n3 = current-command notch Hz, 0 = off,
  *       gz 0=one PI zone 1=standstill scale, gs = standstill scale ×1000)
  *   $R <mA>  IREF override (PI on)   $Z $A $F $B $T $C $G as lines too
@@ -232,6 +240,6 @@
 #define VCM_HW_VERSION          1U   /* PCB / hardware revision */
 #define VCM_FW_VERSION_MAJOR    1U
 #define VCM_FW_VERSION_MINOR    4U
-#define VCM_FW_VERSION_PATCH    54U
+#define VCM_FW_VERSION_PATCH    55U
 
 #endif /* VCM_CONFIG_H */
