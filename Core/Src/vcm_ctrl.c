@@ -26,7 +26,7 @@ static void VCM_ConfigHalfBridge(uint32_t timer_idx, uint32_t output1, uint32_t 
 static void VCM_FaultPin_Set(bool fault_active);
 static void VCM_LoopStateReset(void);
 static float VCM_Absf(float x);
-static float VCM_PiStep(float ref, float fdbk);
+static float VCM_PiStep(float ref, float fdbk_p, float fdbk_i, float ts, uint8_t full_rate);
 static void VCM_IobsUpdate(float ifb, uint8_t meas_ok);
 static void VCM_HRTIM_SetChop(uint32_t timer_idx, uint8_t chop);
 static void VCM_UartWrite(const char *s);
@@ -61,6 +61,26 @@ static uint16_t vcm_idle_deb;
 static float vcm_iref_z1;
 static int8_t vcm_tri_sign; /* +1: A chops / B low; -1: B chops / A low; 0: unset */
 static int8_t vcm_dt_sign;  /* bipolar compensation sign; 0 until |ifb| exceeds hold */
+static float vcm_pi_ref;     /* notched command from the 50 kHz step */
+static float vcm_base_i0;    /* previous period's first-coast sample */
+static float vcm_base_avg;   /* previous period's coast average */
+static uint8_t vcm_base_ok;
+static uint8_t vcm_half_done;   /* 1 = the −pulse step integrated VCM_HALF_TS_S */
+static uint8_t vcm_rep_closed;  /* 1 = this period's 50 kHz PI ran */
+static uint8_t vcm_next_valid;  /* next period has a tri-level −pulse */
+static uint8_t vcm_act_valid;
+static uint16_t vcm_next_cnt_a;
+static uint16_t vcm_next_start_b;
+static uint16_t vcm_next_dcm;
+static uint16_t vcm_next_b1;
+static uint16_t vcm_next_b2;
+static uint16_t vcm_next_cmp3;
+static uint16_t vcm_act_cnt_a;
+static uint16_t vcm_act_start_b;
+static uint16_t vcm_act_dcm;
+static uint16_t vcm_act_cmp3;
+static uint16_t vcm_act_b1;
+static uint16_t vcm_act_b2;
 static uint8_t vcm_run_bip = 1U; /* 1 = bipolar waveform this period */
 static uint8_t vcm_gz_hold;
 static uint8_t vcm_gz_seed;
@@ -130,6 +150,11 @@ static void VCM_LoopStateReset(void)
   vcm_iref_z1 = 0.0f;
   vcm_tri_sign = 0;
   vcm_dt_sign = 0;
+  vcm_base_ok = 0U;
+  vcm_half_done = 0U;
+  vcm_rep_closed = 0U;
+  vcm_next_valid = 0U;
+  vcm_act_valid = 0U;
   vcm_run_bip = 1U;
   vcm_gz_hold = 0U;
   vcm_gz_seed = 0U;
@@ -408,14 +433,16 @@ static float VCM_GainZoneScale(float ref, float err)
 }
 
 /*
- * m = Kp*e + Ki*∫e + R·I_ff + L·di/dt_ff
- * Idle clamp optional. Two-zone scale is applied in VCM_GainZoneScale.
- * Back-calculation anti-windup: excess modulation is subtracted from the
- * integrator, so a saturated accel does not dump extra voltage at arrival.
+ * m = Kp*e_p + Ki*∫e_i + R·I_ff + L·di/dt_ff
+ * Observer mode passes î as e_p and the sampled current as e_i, so the
+ * integrator can supply Ke·v while Kp stays off the 820 Hz sample.
+ * fdbk=0 passes the same sampled current for both.
+ * Back-calculation anti-windup uses the applied modulation.
  */
-static float VCM_PiStep(float ref, float fdbk)
+static float VCM_PiStep(float ref, float fdbk_p, float fdbk_i, float ts, uint8_t full_rate)
 {
-  float err;
+  float err_p;
+  float err_i;
   float m_ff;
   float m_unsat;
   float m;
@@ -424,6 +451,11 @@ static float VCM_PiStep(float ref, float fdbk)
   float ki;
   float m_max;
   float ref_abs = VCM_Absf(ref);
+
+  if (ts < 1.0e-7f)
+  {
+    ts = 1.0e-7f;
+  }
 
 #if VCM_IDLE_CLAMP_EN
   if (g_vcm.pwm_armed != 0U)
@@ -480,20 +512,38 @@ static float VCM_PiStep(float ref, float fdbk)
   {
     g_vcm.integral = 0.0f;
     g_vcm.mod_ff = 0.0f;
-    vcm_iref_z1 = ref;
+    if (full_rate != 0U)
+    {
+      vcm_iref_z1 = ref;
+    }
     return 0.0f;
   }
 #endif
 
-  err = ref - fdbk;
+  err_p = ref - fdbk_p;
+  err_i = ref - fdbk_i;
+  if (full_rate != 0U)
   {
-    float zone = VCM_GainZoneScale(ref, err);
+    float zone = VCM_GainZoneScale(ref, err_p);
     kp = g_vcm.kp * zone;
     ki = g_vcm.ki * zone;
   }
+  else
+  {
+    /* Gain-zone ticks stay at 50 kHz. The half step only reuses the scale. */
+    kp = g_vcm.kp * vcm_gz_s;
+    ki = g_vcm.ki * vcm_gz_s;
+  }
 
-  di_dt = (ref - vcm_iref_z1) * (float)VCM_CTRL_FREQ_HZ;
-  vcm_iref_z1 = ref;
+  if (full_rate != 0U)
+  {
+    di_dt = (ref - vcm_iref_z1) * (float)VCM_CTRL_FREQ_HZ;
+    vcm_iref_z1 = ref;
+  }
+  else
+  {
+    di_dt = 0.0f;
+  }
   if (di_dt > VCM_L_FF_DIDT_MAX)
   {
     di_dt = VCM_L_FF_DIDT_MAX;
@@ -515,7 +565,7 @@ static float VCM_PiStep(float ref, float fdbk)
   }
   g_vcm.mod_ff = m_ff;
 
-  m_unsat = (kp * err) + g_vcm.integral + m_ff;
+  m_unsat = (kp * err_p) + g_vcm.integral + m_ff;
   m_max = VCM_ModMax();
   if (m_unsat > m_max)
   {
@@ -530,7 +580,7 @@ static float VCM_PiStep(float ref, float fdbk)
     m = m_unsat;
   }
 
-  g_vcm.integral += (ki * err * VCM_PWM_TS_S) + (m - m_unsat);
+  g_vcm.integral += (ki * err_i * ts) + (m - m_unsat);
   if (g_vcm.integral > VCM_I_INTEGRAL_LIM)
   {
     g_vcm.integral = VCM_I_INTEGRAL_LIM;
@@ -862,6 +912,7 @@ static void VCM_HRTIM_ApplyDuty(float m)
     cmp_a = duty_min;
     cmp_b = duty_min;
     g_vcm.adc_active_valid = 1U;
+    vcm_next_valid = 0U;
     __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_COMPAREUNIT_1, cmp_a);
     __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_B, HRTIM_COMPAREUNIT_1, cmp_b);
     VCM_HRTIM_SetAdcPhase(cmp_a, VCM_PWM_PERIOD);
@@ -962,9 +1013,35 @@ static void VCM_HRTIM_ApplyDuty(float m)
         z_lo0 = (uint16_t)(VCM_PWM_PERIOD - 2U);
       }
       VCM_HRTIM_SetAdcPhasePair(z_hi0, z_hi1, z_lo0, z_lo1);
+      {
+        uint16_t t0 = VCM_AdcTrigForZero(z_hi0, z_hi1);
+        uint32_t cmp3 = (uint32_t)t0 + (uint32_t)VCM_ADC_CONV_GUARD;
+
+        if (cmp3 >= (uint32_t)(VCM_PWM_PERIOD - 2U))
+        {
+          cmp3 = (uint32_t)VCM_PWM_PERIOD - 2U;
+        }
+        if (cmp3 < 2U)
+        {
+          cmp3 = 2U;
+        }
+        __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_A,
+                               HRTIM_COMPAREUNIT_3, (uint16_t)cmp3);
+        vcm_next_cmp3 = (uint16_t)cmp3;
+      }
     }
+    vcm_next_cnt_a = cnt_a;
+    vcm_next_start_b = start_b;
+    vcm_next_dcm = dcm_cnt;
+    vcm_next_b1 = (uint16_t)__HAL_HRTIM_GETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_B,
+                                                   HRTIM_COMPAREUNIT_1);
+    vcm_next_b2 = (uint16_t)__HAL_HRTIM_GETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_B,
+                                                   HRTIM_COMPAREUNIT_2);
+    vcm_next_valid = (cnt_b > 0U) ? 1U : 0U;
     return;
   }
+
+  vcm_next_valid = 0U;
 
   /* Leg difference = 2·m·T + sign(i)·dt. dt is the two-edge compensation. */
   {
@@ -1378,6 +1455,16 @@ void VCM_CurrentLoop_IRQHandler(void)
   float i_samp;
   uint16_t raw;
 
+  /* The repetition event already loaded the shadow programmed last period. */
+  vcm_act_cnt_a = vcm_next_cnt_a;
+  vcm_act_start_b = vcm_next_start_b;
+  vcm_act_dcm = vcm_next_dcm;
+  vcm_act_cmp3 = vcm_next_cmp3;
+  vcm_act_b1 = vcm_next_b1;
+  vcm_act_b2 = vcm_next_b2;
+  vcm_act_valid = vcm_next_valid;
+  vcm_rep_closed = 0U;
+
   if (vcm_dt_cal != 0U)
   {
     g_vcm.pwm_mode = VCM_PWM_MODE_BIPOLAR;
@@ -1590,15 +1677,215 @@ void VCM_CurrentLoop_IRQHandler(void)
   VCM_SelectRunMode(g_vcm.iref_a);
   {
     float ref = VCM_IfbNotch(g_vcm.iref_a);
-    float fdbk = (g_vcm.pi_fdbk == VCM_PI_FDBK_AVG) ? g_vcm.ifb_avg_a
-                                                    : g_vcm.ifb_hat_a;
+    float fdbk_p = (g_vcm.pi_fdbk == VCM_PI_FDBK_AVG) ? g_vcm.ifb_avg_a
+                                                      : g_vcm.ifb_hat_a;
+    float fdbk_i = ((g_vcm.pi_fdbk == VCM_PI_FDBK_AVG) || (g_vcm.adc_pair_ok != 0U))
+                       ? g_vcm.ifb_avg_a
+                       : fdbk_p;
+    float ts = (vcm_half_done != 0U) ? VCM_HALF_TS_S : VCM_PWM_TS_S;
 
-    m = VCM_PiStep(ref, fdbk);
+    vcm_half_done = 0U;
+    vcm_pi_ref = ref;
+    vcm_base_ok = 0U;
+    if (g_vcm.adc_pair_ok != 0U)
+    {
+      vcm_base_i0 = g_vcm.ifb_ip_a;
+      vcm_base_avg = g_vcm.ifb_avg_a;
+      vcm_base_ok = 1U;
+    }
+    m = VCM_PiStep(ref, fdbk_p, fdbk_i, ts, 1U);
   }
   g_vcm.mod = m;
+  vcm_rep_closed = 1U;
   VCM_HRTIM_ApplyDuty(m);
   VCM_DtCalSample();
   VCM_CapPush();
+}
+
+/* −pulse for a +pulse that has already been scheduled. The coasts stay
+ * long enough for the two samples. */
+static uint8_t VCM_TriSecondPulse(float m_dt, uint16_t cnt_a, uint16_t dcm_cnt,
+                                  uint16_t *start_b, uint16_t *cnt_b)
+{
+  float da;
+  float db;
+  float dcm;
+  uint16_t cb;
+  uint16_t sb;
+  uint16_t remain;
+  uint32_t cb_max;
+  const uint16_t coast_min = VCM_ADC_ZERO_MIN_CNT;
+
+  if ((cnt_a < 1U) || (start_b == NULL) || (cnt_b == NULL))
+  {
+    return 0U;
+  }
+  da = (float)cnt_a / (float)VCM_PWM_PERIOD;
+  dcm = (float)dcm_cnt / (float)VCM_PWM_PERIOD;
+  db = da - (2.0f * m_dt);
+  if (db < dcm)
+  {
+    db = dcm;
+  }
+  cb = (uint16_t)(db * (float)VCM_PWM_PERIOD + 0.5f);
+  if (cb < dcm_cnt)
+  {
+    cb = dcm_cnt;
+  }
+  if (cb < 1U)
+  {
+    return 0U;
+  }
+  if ((uint32_t)VCM_PWM_PERIOD <= ((uint32_t)cnt_a + (2U * (uint32_t)coast_min)))
+  {
+    return 0U;
+  }
+  cb_max = (uint32_t)VCM_PWM_PERIOD - (uint32_t)cnt_a - (2U * (uint32_t)coast_min);
+  if ((uint32_t)cb > cb_max)
+  {
+    cb = (uint16_t)cb_max;
+  }
+  if (cb < dcm_cnt)
+  {
+    return 0U;
+  }
+  remain = (uint16_t)(VCM_PWM_PERIOD - cnt_a - cb);
+  sb = (uint16_t)(cnt_a + (remain / 2U));
+  if ((sb <= cnt_a) || (((uint32_t)sb + (uint32_t)cb) >= (uint32_t)(VCM_PWM_PERIOD - 1U)))
+  {
+    return 0U;
+  }
+  *start_b = sb;
+  *cnt_b = cb;
+  return 1U;
+}
+
+/* Push Timer B's −pulse into the active registers now. The preload is put
+ * back afterwards so the next master update still loads the following period. */
+static void VCM_TimerBApplyNow(uint16_t start, uint16_t high_cnt)
+{
+  HRTIM_Timerx_TypeDef *tim = &hhrtim.Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_B];
+  uint32_t cr = tim->TIMxCR;
+  uint16_t end = (uint16_t)(start + high_cnt);
+
+  tim->TIMxCR = cr & ~HRTIM_TIMCR_PREEN;
+  (void)tim->TIMxCR;
+  tim->CMP1xR = start;
+  tim->CMP2xR = end;
+  tim->TIMxCR = cr | HRTIM_TIMCR_PREEN;
+  (void)tim->TIMxCR;
+  __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_B, HRTIM_COMPAREUNIT_1, vcm_next_b1);
+  __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_B, HRTIM_COMPAREUNIT_2, vcm_next_b2);
+}
+
+void VCM_CurrentLoop_HalfIRQ(void)
+{
+  uint16_t now;
+  uint16_t due;
+  uint16_t start_b;
+  uint16_t cnt_b;
+  float i0;
+  float fdbk_p;
+  float fdbk_i;
+  float m;
+  float m_ach;
+  float m_back;
+  float integ;
+  float ff_saved;
+  uint16_t end_b;
+  const uint16_t late = VCM_ADC_EDGE_GUARD_CNT; /* 1 µs: this CMP3 is stale */
+  const uint16_t edge = 96U;                    /* 200 ns: leave the compare match alone */
+
+  if ((vcm_rep_closed == 0U) || (vcm_act_valid == 0U) || (vcm_run_bip != 0U))
+  {
+    return;
+  }
+  if ((g_vcm.pwm_armed == 0U) || (g_vcm.iref_hold_en != 0U) || (vcm_dt_cal != 0U))
+  {
+    return;
+  }
+  if ((g_vcm.state != VCM_STATE_RUN) || (vcm_base_ok == 0U) || (hadc1.DMA_Handle == NULL))
+  {
+    return;
+  }
+
+  due = vcm_act_cmp3;
+  now = (uint16_t)hhrtim.Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_B].CNTxR;
+  /* Wrapped into the next period: this flag belongs to the period that ended. */
+  if (((uint32_t)now + 2U) < (uint32_t)due)
+  {
+    return;
+  }
+  if ((uint32_t)now > ((uint32_t)due + (uint32_t)late))
+  {
+    return;
+  }
+  if (((uint32_t)now + (uint32_t)edge) >= (uint32_t)vcm_act_start_b)
+  {
+    return;
+  }
+  /* NDTR == 1: the first coast conversion is in dma[0], the second has not started. */
+  if (__HAL_DMA_GET_COUNTER(hadc1.DMA_Handle) != 1U)
+  {
+    return;
+  }
+
+  __DSB();
+  i0 = VCM_AdcToIfbAmpere(vcm_adc1_dma[0]) - g_vcm.ifb_offset_a;
+  fdbk_i = vcm_base_avg + (i0 - vcm_base_i0);
+  if (g_vcm.pi_fdbk == VCM_PI_FDBK_AVG)
+  {
+    fdbk_p = fdbk_i;
+  }
+  else
+  {
+    fdbk_p = g_vcm.ifb_hat_a + (i0 - vcm_base_i0);
+  }
+
+  integ = g_vcm.integral;
+  ff_saved = g_vcm.mod_ff;
+  m = VCM_PiStep(vcm_pi_ref, fdbk_p, fdbk_i, VCM_HALF_TS_S, 0U);
+  if (VCM_TriSecondPulse(m, vcm_act_cnt_a, vcm_act_dcm, &start_b, &cnt_b) == 0U)
+  {
+    g_vcm.integral = integ;
+    g_vcm.mod_ff = ff_saved;
+    return;
+  }
+  now = (uint16_t)hhrtim.Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_B].CNTxR;
+  if ((((uint32_t)now + (uint32_t)edge) >= (uint32_t)start_b) ||
+      (((uint32_t)now + (uint32_t)edge) >= (uint32_t)vcm_act_start_b))
+  {
+    g_vcm.integral = integ;
+    g_vcm.mod_ff = ff_saved;
+    return;
+  }
+
+  m_ach = ((float)vcm_act_cnt_a - (float)cnt_b) / (2.0f * (float)VCM_PWM_PERIOD);
+  m_back = m_ach;
+  {
+    float extra = m_back - m;
+    float quantum = 1.0f / (float)VCM_PWM_PERIOD;
+
+    if ((extra > quantum) || (extra < -quantum))
+    {
+      g_vcm.integral += extra;
+      if (g_vcm.integral > VCM_I_INTEGRAL_LIM)
+      {
+        g_vcm.integral = VCM_I_INTEGRAL_LIM;
+      }
+      if (g_vcm.integral < -VCM_I_INTEGRAL_LIM)
+      {
+        g_vcm.integral = -VCM_I_INTEGRAL_LIM;
+      }
+    }
+  }
+  end_b = (uint16_t)(start_b + cnt_b);
+  if ((start_b != vcm_act_b1) || (end_b != vcm_act_b2))
+  {
+    /* g_vcm.mod stays the 50 kHz command. The observer keeps one 20 µs step. */
+    VCM_TimerBApplyNow(start_b, cnt_b);
+  }
+  vcm_half_done = 1U;
 }
 
 void VCM_Init(void)
@@ -2795,7 +3082,9 @@ static void VCM_ConfigHalfBridge(uint32_t timer_idx, uint32_t output1, uint32_t 
     Error_Handler();
   }
 
-  pTimerCfg.InterruptRequests = (timer_idx == HRTIM_TIMERINDEX_TIMER_A) ? HRTIM_TIM_IT_REP : HRTIM_TIM_IT_NONE;
+  pTimerCfg.InterruptRequests = (timer_idx == HRTIM_TIMERINDEX_TIMER_A)
+                                    ? (HRTIM_TIM_IT_REP | HRTIM_TIM_IT_CMP3)
+                                    : HRTIM_TIM_IT_NONE;
   pTimerCfg.DMARequests = HRTIM_TIM_DMA_NONE;
   pTimerCfg.DMASrcAddress = 0x0000;
   pTimerCfg.DMADstAddress = 0x0000;
