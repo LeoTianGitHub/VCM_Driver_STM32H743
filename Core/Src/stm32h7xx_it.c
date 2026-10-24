@@ -225,11 +225,24 @@ void DMA1_Stream1_IRQHandler(void)
 void HRTIM1_TIMA_IRQHandler(void)
 {
   /* USER CODE BEGIN HRTIM1_TIMA_IRQn 0 */
-  /* Fast path: REP @ 50 kHz ctrl — skip full HAL (keeps main/LED/SysTick alive). */
-  if (__HAL_HRTIM_TIMER_GET_FLAG(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_TIM_FLAG_REP) != 0U)
+  /* Fast path: REP @ 50 kHz and CMP3 at the first-coast sample. */
+  uint32_t rep = __HAL_HRTIM_TIMER_GET_FLAG(&hhrtim, HRTIM_TIMERINDEX_TIMER_A,
+                                            HRTIM_TIM_FLAG_REP);
+  uint32_t cmp3 = __HAL_HRTIM_TIMER_GET_FLAG(&hhrtim, HRTIM_TIMERINDEX_TIMER_A,
+                                             HRTIM_TIM_FLAG_CMP3);
+
+  if ((rep != 0U) || (cmp3 != 0U))
   {
-    __HAL_HRTIM_TIMER_CLEAR_IT(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_TIM_IT_REP);
-    VCM_CurrentLoop_IRQHandler();
+    if (rep != 0U)
+    {
+      __HAL_HRTIM_TIMER_CLEAR_IT(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_TIM_IT_REP);
+      VCM_CurrentLoop_IRQHandler();
+    }
+    if (cmp3 != 0U)
+    {
+      __HAL_HRTIM_TIMER_CLEAR_IT(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_TIM_IT_CMP3);
+      VCM_CurrentLoop_HalfIRQ();
+    }
     return;
   }
   /* USER CODE END HRTIM1_TIMA_IRQn 0 */

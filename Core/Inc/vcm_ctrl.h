@@ -96,6 +96,8 @@ void VCM_ClearFault(void);
 void VCM_ServiceFaultClear(void);
 int VCM_AdcStart(void);
 void VCM_CurrentLoop_IRQHandler(void);
+/* Timer A CMP3: second PI step onto the tri-level −pulse. */
+void VCM_CurrentLoop_HalfIRQ(void);
 void VCM_EnterFault(uint32_t flag);
 void VCM_ServiceDrvEnable(void);
 bool VCM_IsDrvEnActive(void);
