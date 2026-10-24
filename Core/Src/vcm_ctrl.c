@@ -61,7 +61,6 @@ static uint16_t vcm_idle_deb;
 static float vcm_iref_z1;
 static int8_t vcm_tri_sign; /* +1: A chops / B low; -1: B chops / A low; 0: unset */
 static int8_t vcm_dt_sign;  /* bipolar compensation sign; 0 until |ifb| exceeds hold */
-static float vcm_tri_dt_k;   /* tri-level one-edge sign, slewed through zero */
 static float vcm_pi_ref;     /* notched command from the 50 kHz step */
 static float vcm_base_i0;    /* previous period's first-coast sample */
 static float vcm_base_avg;   /* previous period's coast average */
@@ -151,7 +150,6 @@ static void VCM_LoopStateReset(void)
   vcm_iref_z1 = 0.0f;
   vcm_tri_sign = 0;
   vcm_dt_sign = 0;
-  vcm_tri_dt_k = 0.0f;
   vcm_base_ok = 0U;
   vcm_half_done = 0U;
   vcm_rep_closed = 0U;
@@ -869,38 +867,6 @@ static int8_t VCM_DrvDtSign(float i_a)
   return vcm_dt_sign;
 }
 
-/* Move one step toward the held current sign. Full reversal takes
- * VCM_TRI_DT_SLEW_S (about 1 ms), so the zero crossing is not one sample. */
-static void VCM_TriDtSlew(float i_a)
-{
-  float target = (float)VCM_DrvDtSign(i_a);
-  float step = 2.0f / (VCM_TRI_DT_SLEW_S * (float)VCM_CTRL_FREQ_HZ);
-  float d = target - vcm_tri_dt_k;
-
-  if (d > step)
-  {
-    d = step;
-  }
-  else if (d < -step)
-  {
-    d = -step;
-  }
-  vcm_tri_dt_k += d;
-}
-
-/* One gate edge in modulation units. drv_dt_ns is the two-edge bipolar
- * width, so tri-level uses half. dt = 0 makes this zero. */
-static float VCM_TriDtMod(void)
-{
-  uint16_t one = (uint16_t)(VCM_DrvDtCounts() / 2U);
-
-  if (one == 0U)
-  {
-    return 0.0f;
-  }
-  return vcm_tri_dt_k * ((float)one / (2.0f * (float)VCM_PWM_PERIOD));
-}
-
 /* User bipolar stays bipolar. Tri-level stays tri-level. */
 static void VCM_SelectRunMode(float iref)
 {
@@ -955,7 +921,7 @@ static void VCM_HRTIM_ApplyDuty(float m)
     float dcm;
     uint16_t dcm_cnt;
     uint16_t coast_min = VCM_ADC_ZERO_MIN_CNT;
-    float m_dt = m + VCM_TriDtMod();
+    float m_dt = m;
 
     dcm = (g_vcm.iref_hold_en != 0U) ? 0.0f : VCM_TriCmDuty();
     dcm_cnt = (uint16_t)(dcm * (float)VCM_PWM_PERIOD + 0.5f);
@@ -1706,10 +1672,6 @@ void VCM_CurrentLoop_IRQHandler(void)
 
   VCM_IobsUpdate(g_vcm.ifb_avg_a, g_vcm.adc_pair_ok);
   VCM_SelectRunMode(g_vcm.iref_a);
-  if (vcm_run_bip == 0U)
-  {
-    VCM_TriDtSlew(g_vcm.ifb_a);
-  }
   {
     float ref = VCM_IfbNotch(g_vcm.iref_a);
     float fdbk = (g_vcm.pi_fdbk == VCM_PI_FDBK_AVG) ? g_vcm.ifb_avg_a
@@ -1819,7 +1781,6 @@ void VCM_CurrentLoop_HalfIRQ(void)
   float i0;
   float fdbk;
   float m;
-  float m_dt;
   float m_ach;
   float m_back;
   float integ;
@@ -1876,8 +1837,7 @@ void VCM_CurrentLoop_HalfIRQ(void)
   integ = g_vcm.integral;
   ff_saved = g_vcm.mod_ff;
   m = VCM_PiStep(vcm_pi_ref, fdbk, VCM_HALF_TS_S, 0U);
-  m_dt = m + VCM_TriDtMod();
-  if (VCM_TriSecondPulse(m_dt, vcm_act_cnt_a, vcm_act_dcm, &start_b, &cnt_b) == 0U)
+  if (VCM_TriSecondPulse(m, vcm_act_cnt_a, vcm_act_dcm, &start_b, &cnt_b) == 0U)
   {
     g_vcm.integral = integ;
     g_vcm.mod_ff = ff_saved;
@@ -1893,7 +1853,7 @@ void VCM_CurrentLoop_HalfIRQ(void)
   }
 
   m_ach = ((float)vcm_act_cnt_a - (float)cnt_b) / (2.0f * (float)VCM_PWM_PERIOD);
-  m_back = m_ach - VCM_TriDtMod();
+  m_back = m_ach;
   {
     float extra = m_back - m;
     float quantum = 1.0f / (float)VCM_PWM_PERIOD;
