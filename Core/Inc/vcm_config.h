@@ -89,7 +89,8 @@
 #define VCM_IREF_POLARITY       (-1.0f)
 
 /* Single-zone PI @ 50 kHz: fc≈3.9 kHz (zero ~32 Hz).
- * Default feedback is the observer. Host $S fdbk=0 uses the 2-point IFB average. */
+ * Default: Kp on the observer, Ki on the sampled current so Ke·v is trimmed
+ * at steady speed. Host $S fdbk=0 puts both terms on the 2-point IFB average. */
 #define VCM_KP                  0.30f
 #define VCM_KI                  60.0f
 #define VCM_I_INTEGRAL_LIM      0.30f
@@ -106,7 +107,7 @@
 #define VCM_GZ_ENTER_TICKS         2000U     /* 40 ms @ 50 kHz */
 #define VCM_GZ_EXIT_TICKS          100U      /* 2 ms @ 50 kHz */
 
-/* PI feedback: 0 = ifb_avg (direct), 1 = ifb_hat (observer). Host key fdbk=. */
+/* PI feedback: 0 = Kp and Ki on ifb_avg. 1 = Kp on ifb_hat, Ki on ifb_avg. */
 #define VCM_PI_FDBK_AVG         0U
 #define VCM_PI_FDBK_OBS         1U
 #define VCM_PI_FDBK_DEFAULT     VCM_PI_FDBK_OBS
@@ -179,7 +180,9 @@
 /* Min time between the two ADC triggers so the first conversion finishes. */
 #define VCM_ADC_TRIG_GAP           VCM_ADC_CONV_GUARD
 
-/* ADCTRG1 = Timer A CMP2 | CMP4. DMA length 2, memory increment on. */
+/* ADCTRG1 = Timer A CMP2 | CMP4. DMA length 2, MemInc on.
+ * Pair validity comes from DMA TC latch (not REP-time NDTR==2).
+ * CMP4 must stay ≤ PERIOD-CONV_GUARD so the 2nd conversion ends before REP. */
 
 /* Gain-cal: UART force current (clamp meter) and rolling mean window */
 #define VCM_CAL_FORCE_A            0.50f
@@ -216,7 +219,8 @@
 /* Host frames: "$" ... "\n" @ 115200. Avoid 0x05 / 0xA0 (IAP).
  *   $I  identify     $P  telemetry     $D  dump params
  *   $S kp=300 ki=60000 obs=634 lpf=838 ff=0 vbus=48000 r=3620 l=1188 fdbk=1 dt=400 n0=0 n1=0 n2=0 n3=0 gz=0 gs=350
- *      (kp/obs/lpf/vbus/r ×1000, ki ×1000, ff ×1e6, l = µH, fdbk 0=IFB 1=î,
+ *      (kp/obs/lpf/vbus/r ×1000, ki ×1000, ff ×1e6, l = µH,
+ *       fdbk 0=Kp and Ki on IFB, 1=Kp on î and Ki on IFB,
  *       dt = two-edge bipolar compensation ns, 0 = off,
  *       n0..n3 = current-command notch Hz, 0 = off,
  *       gz 0=one PI zone 1=standstill scale, gs = standstill scale ×1000)
@@ -239,6 +243,6 @@
 #define VCM_HW_VERSION          1U   /* PCB / hardware revision */
 #define VCM_FW_VERSION_MAJOR    1U
 #define VCM_FW_VERSION_MINOR    4U
-#define VCM_FW_VERSION_PATCH    56U
+#define VCM_FW_VERSION_PATCH    58U
 
 #endif /* VCM_CONFIG_H */

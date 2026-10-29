@@ -54,7 +54,7 @@ typedef struct
   uint16_t ifb_cal_count;
   VCM_State_t state;
   uint8_t adc_active_valid;
-  uint8_t adc_pair_ok;        /* 1 = this period's single IFB DMA sample is in */
+  uint8_t adc_pair_ok;        /* 1 = fresh DMA-TC pair (I+ and I−) consumed */
   uint8_t pwm_armed;
   uint8_t calib_valid;
   uint8_t iref_override_en;

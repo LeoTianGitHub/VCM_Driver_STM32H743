@@ -26,7 +26,7 @@ static void VCM_ConfigHalfBridge(uint32_t timer_idx, uint32_t output1, uint32_t 
 static void VCM_FaultPin_Set(bool fault_active);
 static void VCM_LoopStateReset(void);
 static float VCM_Absf(float x);
-static float VCM_PiStep(float ref, float fdbk, float ts, uint8_t full_rate);
+static float VCM_PiStep(float ref, float fdbk_p, float fdbk_i, float ts, uint8_t full_rate);
 static void VCM_IobsUpdate(float ifb, uint8_t meas_ok);
 static void VCM_HRTIM_SetChop(uint32_t timer_idx, uint8_t chop);
 static void VCM_UartWrite(const char *s);
@@ -64,6 +64,10 @@ static int8_t vcm_dt_sign;  /* bipolar compensation sign; 0 until |ifb| exceeds 
 static float vcm_pi_ref;     /* notched command from the 50 kHz step */
 static float vcm_base_i0;    /* previous period's first-coast sample */
 static float vcm_base_avg;   /* previous period's coast average */
+static volatile uint32_t vcm_pair_seq;  /* even: dma pair below is stable */
+static volatile uint16_t vcm_pair_raw0;
+static volatile uint16_t vcm_pair_raw1;
+static uint32_t vcm_pair_taken;
 static uint8_t vcm_base_ok;
 static uint8_t vcm_half_done;   /* 1 = the −pulse step integrated VCM_HALF_TS_S */
 static uint8_t vcm_rep_closed;  /* 1 = this period's 50 kHz PI ran */
@@ -433,14 +437,15 @@ static float VCM_GainZoneScale(float ref, float err)
 }
 
 /*
- * m = Kp*e + Ki*∫e + R·I_ff + L·di/dt_ff
- * Idle clamp optional. Two-zone scale is applied in VCM_GainZoneScale.
- * Back-calculation anti-windup: excess modulation is subtracted from the
- * integrator, so a saturated accel does not dump extra voltage at arrival.
+ * m = Kp*e_p + Ki*∫e_i + R·I_ff + L·di/dt_ff
+ * Observer mode: Kp on î, Ki on sampled IFB so Ke·v is trimmed at speed.
+ * fdbk=0 passes the same sampled current for both.
+ * Back-calculation anti-windup uses the applied modulation.
  */
-static float VCM_PiStep(float ref, float fdbk, float ts, uint8_t full_rate)
+static float VCM_PiStep(float ref, float fdbk_p, float fdbk_i, float ts, uint8_t full_rate)
 {
-  float err;
+  float err_p;
+  float err_i;
   float m_ff;
   float m_unsat;
   float m;
@@ -518,10 +523,11 @@ static float VCM_PiStep(float ref, float fdbk, float ts, uint8_t full_rate)
   }
 #endif
 
-  err = ref - fdbk;
+  err_p = ref - fdbk_p;
+  err_i = ref - fdbk_i;
   if (full_rate != 0U)
   {
-    float zone = VCM_GainZoneScale(ref, err);
+    float zone = VCM_GainZoneScale(ref, err_p);
     kp = g_vcm.kp * zone;
     ki = g_vcm.ki * zone;
   }
@@ -562,7 +568,7 @@ static float VCM_PiStep(float ref, float fdbk, float ts, uint8_t full_rate)
   }
   g_vcm.mod_ff = m_ff;
 
-  m_unsat = (kp * err) + g_vcm.integral + m_ff;
+  m_unsat = (kp * err_p) + g_vcm.integral + m_ff;
   m_max = VCM_ModMax();
   if (m_unsat > m_max)
   {
@@ -577,7 +583,7 @@ static float VCM_PiStep(float ref, float fdbk, float ts, uint8_t full_rate)
     m = m_unsat;
   }
 
-  g_vcm.integral += (ki * err * ts) + (m - m_unsat);
+  g_vcm.integral += (ki * err_i * ts) + (m - m_unsat);
   if (g_vcm.integral > VCM_I_INTEGRAL_LIM)
   {
     g_vcm.integral = VCM_I_INTEGRAL_LIM;
@@ -671,18 +677,25 @@ static uint16_t VCM_AdcTrigForZero(uint16_t z0, uint16_t z1)
 static void VCM_HRTIM_WriteAdcTrigs(uint16_t trig_a, uint16_t trig_b)
 {
   uint16_t gap = VCM_ADC_TRIG_GAP;
+  /* Second conversion must finish before PER/REP. PERIOD-2 left Tconv hanging
+   * across the rollover → NDTR stuck at 1 and pair stayed 0 forever. */
+  uint16_t max_b = (uint16_t)(VCM_PWM_PERIOD - VCM_ADC_CONV_GUARD);
 
   if (gap < 2U)
   {
     gap = 2U;
   }
+  if (max_b <= (uint16_t)(2U + gap))
+  {
+    max_b = (uint16_t)(2U + gap);
+  }
   if (trig_b < (uint16_t)(trig_a + gap))
   {
     trig_b = (uint16_t)(trig_a + gap);
   }
-  if (trig_b > (uint16_t)(VCM_PWM_PERIOD - 2U))
+  if (trig_b > max_b)
   {
-    trig_b = (uint16_t)(VCM_PWM_PERIOD - 2U);
+    trig_b = max_b;
   }
   if (((uint32_t)trig_a + (uint32_t)gap) > (uint32_t)trig_b)
   {
@@ -748,6 +761,11 @@ int VCM_AdcStart(void)
   }
   vcm_adc2_dma = (uint16_t)VCM_ADC_MID;
 
+  vcm_pair_seq = 0U;
+  vcm_pair_taken = 0U;
+  vcm_pair_raw0 = (uint16_t)VCM_ADC_MID;
+  vcm_pair_raw1 = (uint16_t)VCM_ADC_MID;
+
   if (HAL_ADC_Start_DMA(&hadc1, (uint32_t *)vcm_adc1_dma, VCM_ADC_N) != HAL_OK)
   {
     return -1;
@@ -757,12 +775,34 @@ int VCM_AdcStart(void)
     return -1;
   }
 
-  __HAL_DMA_DISABLE_IT(hadc1.DMA_Handle, DMA_IT_TC | DMA_IT_HT);
+  /* ADC1: TC = both coast samples latched. HT unused. ADC2: poll only. */
+  __HAL_DMA_DISABLE_IT(hadc1.DMA_Handle, DMA_IT_HT);
+  __HAL_DMA_ENABLE_IT(hadc1.DMA_Handle, DMA_IT_TC);
   __HAL_DMA_DISABLE_IT(hadc2.DMA_Handle, DMA_IT_TC | DMA_IT_HT);
-  HAL_NVIC_DisableIRQ(DMA1_Stream0_IRQn);
+  HAL_NVIC_SetPriority(DMA1_Stream0_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream0_IRQn);
   HAL_NVIC_DisableIRQ(DMA1_Stream1_IRQn);
 
   return 0;
+}
+
+/* DMA length-2 TC: I+ then I− are both in memory. Do not run PI here —
+ * latch only; the 50 kHz REP consumes the snapshot. */
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
+{
+  uint32_t seq;
+
+  if ((hadc == NULL) || (hadc->Instance != ADC1))
+  {
+    return;
+  }
+  seq = vcm_pair_seq + 1U;
+  vcm_pair_seq = seq; /* odd = copy in progress */
+  __DMB();
+  vcm_pair_raw0 = vcm_adc1_dma[0];
+  vcm_pair_raw1 = vcm_adc1_dma[1];
+  __DMB();
+  vcm_pair_seq = seq + 1U; /* even = stable */
 }
 
 static void VCM_HRTIM_SetChop(uint32_t timer_idx, uint8_t chop)
@@ -1484,28 +1524,46 @@ void VCM_CurrentLoop_IRQHandler(void)
 
   __DSB();
   g_vcm.adc_iref = vcm_adc2_dma;
-  g_vcm.adc_pair_ok = (hadc1.DMA_Handle != NULL)
-                      && (__HAL_DMA_GET_COUNTER(hadc1.DMA_Handle) == VCM_ADC_N);
-
-  raw = vcm_adc1_dma[0];
-  g_vcm.adc_ifb = raw;
   {
-    float i0 = VCM_AdcToIfbAmpere(vcm_adc1_dma[0]) - g_vcm.ifb_offset_a;
-    float i1 = VCM_AdcToIfbAmpere(vcm_adc1_dma[1]) - g_vcm.ifb_offset_a;
+    uint32_t seq;
+    uint16_t raw0;
+    uint16_t raw1;
+    float i0;
+    float i1;
 
-    /* dma[0] is the earlier coast, dma[1] the later one. */
-    if (g_vcm.adc_pair_ok != 0U)
+    /* Prefer the DMA-TC snapshot: both coasts finished. NDTR alone races. */
+    seq = vcm_pair_seq;
+    raw0 = vcm_pair_raw0;
+    raw1 = vcm_pair_raw1;
+    __DMB();
+    if ((seq == vcm_pair_seq) && ((seq & 1U) == 0U) &&
+        (seq != 0U) && (seq != vcm_pair_taken))
     {
+      vcm_pair_taken = seq;
+      raw = raw0;
+      g_vcm.adc_ifb = raw0;
+      i0 = VCM_AdcToIfbAmpere(raw0) - g_vcm.ifb_offset_a;
+      i1 = VCM_AdcToIfbAmpere(raw1) - g_vcm.ifb_offset_a;
       i_samp = 0.5f * (i0 + i1);
+      g_vcm.ifb_ip_a = i0;
+      g_vcm.ifb_im_a = i1;
+      g_vcm.adc_pair_ok = 1U;
+      g_vcm.ifb_raw_a = i_samp + g_vcm.ifb_offset_a;
+      g_vcm.ifb_a = i_samp;
+      g_vcm.ifb_avg_a = i_samp;
+    }
+    else
+    {
+      /* Missed TC this period: still publish the latest dma[0] so iavg moves. */
+      g_vcm.adc_pair_ok = 0U;
+      raw = vcm_adc1_dma[0];
+      g_vcm.adc_ifb = raw;
+      i0 = VCM_AdcToIfbAmpere(raw) - g_vcm.ifb_offset_a;
+      i_samp = i0;
       g_vcm.ifb_raw_a = i_samp + g_vcm.ifb_offset_a;
       g_vcm.ifb_a = i_samp;
       g_vcm.ifb_avg_a = i_samp;
       g_vcm.ifb_ip_a = i0;
-      g_vcm.ifb_im_a = i1;
-    }
-    else
-    {
-      i_samp = i0;
     }
   }
 
@@ -1674,8 +1732,11 @@ void VCM_CurrentLoop_IRQHandler(void)
   VCM_SelectRunMode(g_vcm.iref_a);
   {
     float ref = VCM_IfbNotch(g_vcm.iref_a);
-    float fdbk = (g_vcm.pi_fdbk == VCM_PI_FDBK_AVG) ? g_vcm.ifb_avg_a
-                                                    : g_vcm.ifb_hat_a;
+    float fdbk_p = (g_vcm.pi_fdbk == VCM_PI_FDBK_AVG) ? g_vcm.ifb_avg_a
+                                                      : g_vcm.ifb_hat_a;
+    float fdbk_i = ((g_vcm.pi_fdbk == VCM_PI_FDBK_AVG) || (g_vcm.adc_pair_ok != 0U))
+                       ? g_vcm.ifb_avg_a
+                       : fdbk_p;
     float ts = (vcm_half_done != 0U) ? VCM_HALF_TS_S : VCM_PWM_TS_S;
 
     vcm_half_done = 0U;
@@ -1687,7 +1748,7 @@ void VCM_CurrentLoop_IRQHandler(void)
       vcm_base_avg = g_vcm.ifb_avg_a;
       vcm_base_ok = 1U;
     }
-    m = VCM_PiStep(ref, fdbk, ts, 1U);
+    m = VCM_PiStep(ref, fdbk_p, fdbk_i, ts, 1U);
   }
   g_vcm.mod = m;
   vcm_rep_closed = 1U;
@@ -1779,7 +1840,8 @@ void VCM_CurrentLoop_HalfIRQ(void)
   uint16_t start_b;
   uint16_t cnt_b;
   float i0;
-  float fdbk;
+  float fdbk_p;
+  float fdbk_i;
   float m;
   float m_ach;
   float m_back;
@@ -1825,18 +1887,19 @@ void VCM_CurrentLoop_HalfIRQ(void)
 
   __DSB();
   i0 = VCM_AdcToIfbAmpere(vcm_adc1_dma[0]) - g_vcm.ifb_offset_a;
+  fdbk_i = vcm_base_avg + (i0 - vcm_base_i0);
   if (g_vcm.pi_fdbk == VCM_PI_FDBK_AVG)
   {
-    fdbk = vcm_base_avg + (i0 - vcm_base_i0);
+    fdbk_p = fdbk_i;
   }
   else
   {
-    fdbk = g_vcm.ifb_hat_a + (i0 - vcm_base_i0);
+    fdbk_p = g_vcm.ifb_hat_a + (i0 - vcm_base_i0);
   }
 
   integ = g_vcm.integral;
   ff_saved = g_vcm.mod_ff;
-  m = VCM_PiStep(vcm_pi_ref, fdbk, VCM_HALF_TS_S, 0U);
+  m = VCM_PiStep(vcm_pi_ref, fdbk_p, fdbk_i, VCM_HALF_TS_S, 0U);
   if (VCM_TriSecondPulse(m, vcm_act_cnt_a, vcm_act_dcm, &start_b, &cnt_b) == 0U)
   {
     g_vcm.integral = integ;
@@ -1892,6 +1955,10 @@ void VCM_Init(void)
   g_vcm.ifb_raw_a = 0.0f;
   g_vcm.ifb_offset_a = 0.0f;
   g_vcm.adc_pair_ok = 0U;
+  vcm_pair_seq = 0U;
+  vcm_pair_taken = 0U;
+  vcm_pair_raw0 = (uint16_t)VCM_ADC_MID;
+  vcm_pair_raw1 = (uint16_t)VCM_ADC_MID;
   g_vcm.iref_offset_a = 0.0f;
   g_vcm.iref_cal_acc = 0.0f;
   g_vcm.pwm_armed = 0U;
@@ -2157,6 +2224,10 @@ static void VCM_HostTelem(void)
   VCM_UartWriteI32((int32_t)g_vcm.fault_flags);
   VCM_UartWrite(" pair=");
   VCM_UartWriteI32((int32_t)g_vcm.adc_pair_ok);
+  VCM_UartWrite(" ndtr=");
+  VCM_UartWriteI32((hadc1.DMA_Handle != NULL)
+                       ? (int32_t)__HAL_DMA_GET_COUNTER(hadc1.DMA_Handle)
+                       : -1);
   VCM_UartWrite(" adc_ifb=");
   VCM_UartWriteI32((int32_t)g_vcm.adc_ifb);
   VCM_UartWrite(" adc_iref=");
@@ -3002,6 +3073,10 @@ uint8_t VCM_ServiceUartCmd(uint8_t cmd)
     VCM_UartWriteI32((int32_t)g_vcm.adc_ifb);
     VCM_UartWrite(" pair=");
     VCM_UartWriteI32((int32_t)g_vcm.adc_pair_ok);
+    VCM_UartWrite(" ndtr=");
+    VCM_UartWriteI32((hadc1.DMA_Handle != NULL)
+                         ? (int32_t)__HAL_DMA_GET_COUNTER(hadc1.DMA_Handle)
+                         : -1);
     VCM_UartWrite(" ov=");
     VCM_UartWriteI32((int32_t)g_vcm.iref_override_en);
     VCM_UartWrite(" armed=");
