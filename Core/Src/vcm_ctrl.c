@@ -92,6 +92,10 @@ static uint16_t vcm_gz_tick;
 static float vcm_gz_ref;
 static float vcm_gz_ref_z;
 static float vcm_gz_s = 1.0f;
+static float vcm_e_hat;      /* Ke·v estimate, volts */
+static float vcm_e_apply;    /* volts actually added into m; 0 inside the gate */
+static float vcm_e_innov_lp;
+static float vcm_kp_fdbk_lp; /* Kp feedback after ~200 Hz EMA */
 typedef struct
 {
   float b0, b1, b2, a1, a2;
@@ -181,11 +185,17 @@ static void VCM_LoopStateReset(void)
   g_vcm.ifb_filt_a = 0.0f;
   g_vcm.ifb_ip_a = 0.0f;
   g_vcm.ifb_im_a = 0.0f;
+  vcm_e_hat = 0.0f;
+  vcm_e_apply = 0.0f;
+  vcm_e_innov_lp = 0.0f;
+  vcm_kp_fdbk_lp = 0.0f;
 }
 
 /*
  * Luenberger observer: voltage model from last applied m, correct with 2-pt IFB.
  * Skip the innovation if this period's pair is missing (predict only).
+ * ê is the Ke·v term missing from that model. It is applied in VCM_PiStep
+ * so the integrator does not have to store it through a stop.
  */
 static void VCM_IobsUpdate(float ifb, uint8_t meas_ok)
 {
@@ -196,6 +206,7 @@ static void VCM_IobsUpdate(float ifb, uint8_t meas_ok)
   float r = g_vcm.coil_r_ohm + VCM_IFB_RS_OHM;
   float v;
   float ts_l;
+  float i_pred;
 
   if (l < 1.0e-4f)
   {
@@ -206,10 +217,15 @@ static void VCM_IobsUpdate(float ifb, uint8_t meas_ok)
     vb = 1.0f;
   }
   v = 2.0f * g_vcm.mod * vb;
+#if (VCM_E_OBS_EN != 0U)
+  v -= vcm_e_apply;
+#endif
   ts_l = VCM_PWM_TS_S / l;
-  i += ts_l * (v - (r * i));
+  i_pred = i + (ts_l * (v - (r * i)));
   if (meas_ok != 0U)
   {
+    float innov = ifb - i_pred;
+
     if (a < 0.0f)
     {
       a = 0.0f;
@@ -218,7 +234,45 @@ static void VCM_IobsUpdate(float ifb, uint8_t meas_ok)
     {
       a = 1.0f;
     }
-    i += a * (ifb - i);
+#if (VCM_E_OBS_EN != 0U)
+    if ((g_vcm.pwm_armed != 0U) && (g_vcm.iref_hold_en == 0U))
+    {
+      float e_max;
+
+      vcm_e_innov_lp += VCM_E_OBS_IN_A * (innov - vcm_e_innov_lp);
+      if (VCM_Absf(g_vcm.iref_a) < VCM_E_OBS_I_MIN)
+      {
+        vcm_e_hat -= VCM_E_OBS_BLEED_A * vcm_e_hat;
+        vcm_e_apply = 0.0f;
+      }
+      else
+      {
+        /* innov ≈ (Ts/L)·(e_hat − Ke·v). Subtracting pulls ê onto Ke·v. */
+        vcm_e_hat -= (6.2831853f * VCM_E_OBS_HZ) * l * vcm_e_innov_lp;
+        e_max = 0.90f * vb;
+        if (vcm_e_hat > e_max)
+        {
+          vcm_e_hat = e_max;
+        }
+        else if (vcm_e_hat < -e_max)
+        {
+          vcm_e_hat = -e_max;
+        }
+        vcm_e_apply = vcm_e_hat;
+      }
+    }
+    else
+    {
+      vcm_e_hat = 0.0f;
+      vcm_e_apply = 0.0f;
+      vcm_e_innov_lp = 0.0f;
+    }
+#endif
+    i = i_pred + (a * innov);
+  }
+  else
+  {
+    i = i_pred;
   }
   if (i > VCM_I_OCP_A)
   {
@@ -523,8 +577,27 @@ static float VCM_PiStep(float ref, float fdbk_p, float fdbk_i, float ts, uint8_t
   }
 #endif
 
-  err_p = ref - fdbk_p;
+  /* Kp sees a ~200 Hz copy of î/IFB; Ki keeps the raw sample + deadband. */
+  if (full_rate != 0U)
+  {
+    float a = VCM_KP_FDBK_LPF_A;
+    if (a < 0.0f)
+    {
+      a = 0.0f;
+    }
+    if (a > 1.0f)
+    {
+      a = 1.0f;
+    }
+    vcm_kp_fdbk_lp += a * (fdbk_p - vcm_kp_fdbk_lp);
+  }
+  err_p = ref - vcm_kp_fdbk_lp;
   err_i = ref - fdbk_i;
+  /* Force hold: ADC floor ~±20–40 mA. Do not let Ki wind that into mod. */
+  if (VCM_Absf(err_i) < VCM_KI_ERR_DB_A)
+  {
+    err_i = 0.0f;
+  }
   if (full_rate != 0U)
   {
     float zone = VCM_GainZoneScale(ref, err_p);
@@ -565,6 +638,9 @@ static float VCM_PiStep(float ref, float fdbk_p, float fdbk_i, float ts, uint8_t
     }
     l_ff = VCM_L_FF_SCALE * g_vcm.coil_l_h / (2.0f * vb);
     m_ff = (ref * g_vcm.ff_mod_per_a) + (di_dt * l_ff);
+#if (VCM_E_OBS_EN != 0U)
+    m_ff += vcm_e_apply / (2.0f * vb);
+#endif
   }
   g_vcm.mod_ff = m_ff;
 
@@ -950,8 +1026,8 @@ static void VCM_HRTIM_ApplyDuty(float m)
     cmp_b = duty_min;
     g_vcm.adc_active_valid = 1U;
     vcm_next_valid = 0U;
-    __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_COMPAREUNIT_1, cmp_a);
-    __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_B, HRTIM_COMPAREUNIT_1, cmp_b);
+  __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_COMPAREUNIT_1, cmp_a);
+  __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_B, HRTIM_COMPAREUNIT_1, cmp_b);
     VCM_HRTIM_SetAdcPhase(cmp_a, VCM_PWM_PERIOD);
     return;
   }
@@ -1290,7 +1366,7 @@ void VCM_Stop(void)
   VCM_HRTIM_ApplyDuty(0.0f);
   if (g_vcm.state != VCM_STATE_FAULT)
   {
-    g_vcm.state = VCM_STATE_IDLE;
+  g_vcm.state = VCM_STATE_IDLE;
   }
 }
 
@@ -1342,8 +1418,8 @@ void VCM_ServiceDrvEnable(void)
         vcm_en_off_ms = HAL_GetTick();
       }
       else if ((HAL_GetTick() - vcm_en_off_ms) >= VCM_EN_OFF_DEBOUNCE_MS)
-      {
-        VCM_Stop();
+    {
+      VCM_Stop();
       }
     }
     return;
@@ -1382,13 +1458,18 @@ void VCM_Start(void)
                                       HRTIM_TIMERID_TIMER_A |
                                       HRTIM_TIMERID_TIMER_B) != HAL_OK)
   {
-    Error_Handler();
+    /* Stay in the main loop so a version query can still be answered. */
+    g_vcm.fault_flags |= 8U;
+    g_vcm.state = VCM_STATE_FAULT;
+    return;
   }
   if (HAL_HRTIM_WaveformOutputStart(&hhrtim,
                                     HRTIM_OUTPUT_TA1 | HRTIM_OUTPUT_TA2 |
                                     HRTIM_OUTPUT_TB1 | HRTIM_OUTPUT_TB2) != HAL_OK)
   {
-    Error_Handler();
+    g_vcm.fault_flags |= 8U;
+    g_vcm.state = VCM_STATE_FAULT;
+    return;
   }
 
   vcm_chop_a = 0xFFU;
@@ -1617,8 +1698,8 @@ void VCM_CurrentLoop_IRQHandler(void)
     }
     if ((vcm_en_off_samples > VCM_EN_GLITCH_SAMPLES) &&
         ((g_vcm.state == VCM_STATE_RUN) || (g_vcm.state == VCM_STATE_CALIB)))
-    {
-      VCM_Stop();
+  {
+    VCM_Stop();
     }
     /* Capture must keep recording while the bridge is off, or the host plot stays empty. */
     VCM_CapPush();
@@ -1924,14 +2005,14 @@ void VCM_CurrentLoop_HalfIRQ(void)
     if ((extra > quantum) || (extra < -quantum))
     {
       g_vcm.integral += extra;
-      if (g_vcm.integral > VCM_I_INTEGRAL_LIM)
-      {
-        g_vcm.integral = VCM_I_INTEGRAL_LIM;
-      }
-      if (g_vcm.integral < -VCM_I_INTEGRAL_LIM)
-      {
-        g_vcm.integral = -VCM_I_INTEGRAL_LIM;
-      }
+  if (g_vcm.integral > VCM_I_INTEGRAL_LIM)
+  {
+    g_vcm.integral = VCM_I_INTEGRAL_LIM;
+  }
+  if (g_vcm.integral < -VCM_I_INTEGRAL_LIM)
+  {
+    g_vcm.integral = -VCM_I_INTEGRAL_LIM;
+  }
     }
   }
   end_b = (uint16_t)(start_b + cnt_b);
@@ -2031,6 +2112,11 @@ void VCM_Init(void)
 static uint8_t vcm_uart_rxq[VCM_UART_RXQ];
 static uint16_t vcm_uart_rx_w;
 static uint16_t vcm_uart_rx_r;
+/* Bytes seen before the host parser is ready (UID blink). 0x07 is answered
+ * immediately; everything else is replayed on the normal path. */
+static uint8_t vcm_uart_hold[16];
+static uint8_t vcm_uart_hold_n;
+static uint8_t vcm_uart_hold_r;
 
 static void VCM_UartRxPull(void)
 {
@@ -2051,9 +2137,13 @@ static void VCM_UartRxPull(void)
   }
 }
 
-uint8_t VCM_UartRxPop(uint8_t *out)
+static uint8_t VCM_UartPopHw(uint8_t *out)
 {
+  uint32_t cr1 = huart1.Instance->CR1;
+
+  huart1.Instance->CR1 = cr1 & ~USART_CR1_RXNEIE;
   VCM_UartRxPull();
+  huart1.Instance->CR1 = cr1;
   if (vcm_uart_rx_r == vcm_uart_rx_w)
   {
     return 0U;
@@ -2061,6 +2151,64 @@ uint8_t VCM_UartRxPop(uint8_t *out)
   *out = vcm_uart_rxq[vcm_uart_rx_r];
   vcm_uart_rx_r = (uint16_t)((vcm_uart_rx_r + 1U) % VCM_UART_RXQ);
   return 1U;
+}
+
+uint8_t VCM_UartRxPop(uint8_t *out)
+{
+  if (vcm_uart_hold_r < vcm_uart_hold_n)
+  {
+    *out = vcm_uart_hold[vcm_uart_hold_r];
+    vcm_uart_hold_r++;
+    if (vcm_uart_hold_r >= vcm_uart_hold_n)
+    {
+      vcm_uart_hold_r = 0U;
+      vcm_uart_hold_n = 0U;
+    }
+    return 1U;
+  }
+  return VCM_UartPopHw(out);
+}
+
+void VCM_UartRxISR(void)
+{
+  VCM_UartRxPull();
+}
+
+void VCM_UartRxArm(void)
+{
+  if (huart1.Instance == NULL)
+  {
+    return;
+  }
+  HAL_NVIC_SetPriority(USART1_IRQn, 2, 0);
+  HAL_NVIC_EnableIRQ(USART1_IRQn);
+  SET_BIT(huart1.Instance->CR1, USART_CR1_RXNEIE);
+}
+
+/* IAP tool sends 0x07 and waits for one version line. */
+void VCM_PollVersionQuery(void)
+{
+  uint8_t b;
+
+  while (VCM_UartPopHw(&b) != 0U)
+  {
+    if (b == 0x07U)
+    {
+      VCM_UartWrite("1.");
+      VCM_UartWriteI32((int32_t)VCM_FW_VERSION_MAJOR);
+      VCM_UartWrite(".");
+      VCM_UartWriteI32((int32_t)VCM_FW_VERSION_MINOR);
+      VCM_UartWrite(".");
+      VCM_UartWriteI32((int32_t)VCM_FW_VERSION_PATCH);
+      VCM_UartWrite("\r\n");
+      VCM_UartFlush();
+    }
+    else if (vcm_uart_hold_n < (uint8_t)sizeof(vcm_uart_hold))
+    {
+      vcm_uart_hold[vcm_uart_hold_n] = b;
+      vcm_uart_hold_n++;
+    }
+  }
 }
 
 static void VCM_UartWrite(const char *s)
@@ -2196,6 +2344,8 @@ static void VCM_HostTelem(void)
   VCM_UartWriteMicro(g_vcm.mod);
   VCM_UartWrite(" ff_e6=");
   VCM_UartWriteMicro(g_vcm.mod_ff);
+  VCM_UartWrite(" ev_mv=");
+  VCM_UartWriteMilli(vcm_e_hat);
   VCM_UartWrite(" kp_e3=");
   VCM_UartWriteMilli(g_vcm.kp);
   VCM_UartWrite(" ki_e3=");
@@ -2251,6 +2401,22 @@ static void VCM_HostWriteVersion(void)
   VCM_UartWriteI32((int32_t)VCM_FW_VERSION_MINOR);
   VCM_UartWrite(".");
   VCM_UartWriteI32((int32_t)VCM_FW_VERSION_PATCH);
+}
+
+void VCM_BootAnnounce(void)
+{
+  if (huart1.Instance == NULL)
+  {
+    return;
+  }
+  VCM_UartWrite("1.");
+  VCM_UartWriteI32((int32_t)VCM_FW_VERSION_MAJOR);
+  VCM_UartWrite(".");
+  VCM_UartWriteI32((int32_t)VCM_FW_VERSION_MINOR);
+  VCM_UartWrite(".");
+  VCM_UartWriteI32((int32_t)VCM_FW_VERSION_PATCH);
+  VCM_UartWrite("\r\n");
+  VCM_UartFlush();
 }
 
 static void VCM_HostDump(void)

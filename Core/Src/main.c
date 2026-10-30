@@ -151,6 +151,8 @@ int main(void)
   MX_HRTIM_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
+  VCM_UartRxArm();
+  VCM_BootAnnounce();
 #ifdef UID_ENCRYPTION
 	if(UID_Encryption_Key_Check((void*)KEY_BASE,
 								(void*)UID_BASE,
@@ -163,6 +165,7 @@ int main(void)
 		{
 			HAL_GPIO_TogglePin(PROCESS_LED_GPIO_Port, PROCESS_LED_Pin);
 			HAL_Delay(100);
+			VCM_PollVersionQuery();
 		}
 	}
 	else
@@ -171,8 +174,10 @@ int main(void)
 		{
 			HAL_GPIO_TogglePin(PROCESS_LED_GPIO_Port, PROCESS_LED_Pin);
 			HAL_Delay(50);
+			VCM_PollVersionQuery();
 		}
 		HAL_Delay(200);
+		VCM_PollVersionQuery();
 	}
   #endif
 
@@ -201,9 +206,9 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    IAP_ServiceUartCommand();
     VCM_ServiceDrvEnable();
     VCM_ServiceFaultClear();
-    IAP_ServiceUartCommand();
     ProcessLed_Service();
   }
   /* USER CODE END 3 */

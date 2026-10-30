@@ -38,7 +38,7 @@ typedef struct
   float ki;
   float ff_mod_per_a;
   float iref_lpf_a;    /* Live/F command LPF α; 0.838 ≈ analog 14.5 kHz @ 50 kHz */
-  float i_obs_a;       /* observer α; 0.634 ≈ 8000 Hz @ 50 kHz */
+  float i_obs_a;       /* observer α; 0.0609 ≈ 500 Hz @ 50 kHz */
   float vbus_v;        /* plant Vbus; observer + R-FF */
   float coil_l_h;      /* plant L */
   float coil_r_ohm;    /* plant R (coil; Rs added in observer/FF) */
@@ -110,6 +110,10 @@ uint8_t VCM_ServiceUartCmd(uint8_t cmd);
 void VCM_ServiceUartByte(uint8_t b);
 /** Pop one USART1 byte. Also keeps bytes received while a capture line is transmitting. */
 uint8_t VCM_UartRxPop(uint8_t *out);
+void VCM_UartRxISR(void);
+void VCM_UartRxArm(void);
+void VCM_PollVersionQuery(void);
+void VCM_BootAnnounce(void);
 /** Run deferred $W/$E Flash erase/program from main loop (not from the UART parser). */
 void VCM_NvPoll(void);
 

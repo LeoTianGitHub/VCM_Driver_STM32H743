@@ -254,4 +254,9 @@ void HRTIM1_TIMA_IRQHandler(void)
 
 /* USER CODE BEGIN 1 */
 
+void USART1_IRQHandler(void)
+{
+  VCM_UartRxISR();
+}
+
 /* USER CODE END 1 */

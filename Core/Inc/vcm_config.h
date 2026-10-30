@@ -92,7 +92,7 @@
  * Default: Kp on the observer, Ki on the sampled current so Ke·v is trimmed
  * at steady speed. Host $S fdbk=0 puts both terms on the 2-point IFB average. */
 #define VCM_KP                  0.30f
-#define VCM_KI                  60.0f
+#define VCM_KI                  300.0f
 #define VCM_I_INTEGRAL_LIM      0.30f
 
 /* Two-zone PI. Motion uses Kp/Ki. After the current command has been
@@ -120,10 +120,12 @@
 #define VCM_VBUS_V              48.0f
 #define VCM_VBUS_MIN_V          24.0f
 #define VCM_VBUS_MAX_V          48.0f
-/* R-FF default off. PlantSyncFf uses SCALE, so a Vbus/R change without ff= stays 0. */
+/* R-FF off. SCALE=1 cancels coil R, and the PI (tuned with R in the
+ * plant) then rings the ~820 Hz mode — audible squeal. ê still removes
+ * the Ke·v that was left in the integrator at the end of a move.
+ * A Vbus/R change without an explicit ff= keeps the saved ff. */
+#define VCM_FF_SCALE            0.0f
 #define VCM_FF_MOD_PER_A        0.0f
-#define VCM_FF_SCALE            (VCM_FF_MOD_PER_A * (2.0f * VCM_VBUS_V) / \
-                                 (VCM_COIL_R_OHM + VCM_IFB_RS_OHM))
 #define VCM_L_FF_SCALE          0.0f
 #define VCM_L_FF_MOD_PER_A      (VCM_L_FF_SCALE * VCM_COIL_L_H / (2.0f * VCM_VBUS_V))
 #define VCM_IREF_OVR_LPF_A      0.838f   /* 1-exp(-2*pi*14500/50000); Live-tunable */
@@ -132,13 +134,27 @@
 /*
  * Current observer on the period-average IFB.
  *   î ← î + (Ts/L)(2·m·Vbus − R·î) + α(ifb_avg − î)
- * Default fo≈8000 Hz. α is the host milli step 0.634 (displays 7999 Hz).
- * HF still comes from the voltage model. 1-exp(-2*pi*8000/50000) = 0.634069.
+ * Default fo≈500 Hz. α is the host milli step 0.061 (displays ~500 Hz).
+ * HF still comes from the voltage model. 1-exp(-2*pi*500/50000) = 0.06090.
  */
-#define VCM_I_OBS_HZ            8000.0f
-#define VCM_I_OBS_A             0.634f   /* host obs=634 @ 50 kHz */
+#define VCM_I_OBS_HZ            500.0f
+#define VCM_I_OBS_A             0.0609f  /* host obs=61 @ 50 kHz */
 #define VCM_I_OBS_R_OHM         (VCM_COIL_R_OHM + VCM_IFB_RS_OHM)
 #define VCM_I_OBS_TS_OVER_L     (VCM_PWM_TS_S / VCM_COIL_L_H)
+
+/* ê estimates Ke·v and is added as ê/(2·Vbus) while |Iref| ≥ I_MIN.
+ * Below that gate it is not applied and bleeds off, so idle noise cannot
+ * wind a voltage into the coil. Bandwidth ~250 Hz: fast enough to drop
+ * when the axis stops, slow enough not to chase the current-sample hash.
+ * Innovation LPF 500 Hz: 1-exp(-2*pi*500/50000) = 0.06090.
+ * Idle bleed ~40 Hz: 1-exp(-2*pi*40/50000) = 0.005013. */
+/* Off: ê chased IFB hash into audible squeal. Re-enable only after
+ * pair sampling and idle Ki are quiet on the real axis. */
+#define VCM_E_OBS_EN            0U
+#define VCM_E_OBS_HZ            250.0f
+#define VCM_E_OBS_IN_A          0.06090f
+#define VCM_E_OBS_I_MIN         0.050f
+#define VCM_E_OBS_BLEED_A       0.005013f
 
 /*
  * 0: keep PWM at standstill (competitor-style; no software dead zone).
@@ -149,8 +165,15 @@
 #define VCM_IDLE_EXIT_A            0.035f
 #define VCM_IDLE_ENTER_DEB         5000U  /* 100 ms @ 50 kHz */
 
-/* No error/IREF deadband: PI stays closed through zero (small-current linear).
- * Quiet idle is UART 'Z' only. One fixed-phase IFB sample feeds the observer. */
+/* Kp stays closed at every current. Ki ignores |e_i| below the ADC noise
+ * floor so a constant-force hold does not walk modulation on IFB hash.
+ * Quiet idle is UART 'Z' only. */
+/* 0 = off. Was 0.10 A while IFB hash walked Ki; hardware RC made it redundant. */
+#define VCM_KI_ERR_DB_A            0.0f
+/* Kp feedback EMA @ 50 kHz. 1.0 = off (pass-through). Hardware RC on
+ * TPA8001→ADC already kills the HF hash; keep this at 1 so Kp BW returns.
+ * Set ≈0.0247 (~200 Hz) only if the analog filter is missing. */
+#define VCM_KP_FDBK_LPF_A          1.0f
 
 /* 0: enable goes straight to RUN (no IFB/IREF offset cal, no 2 ms open loop).
  * 1: measure offsets for VCM_IFB_CAL_SAMPLES with m=0 before closing PI. */
@@ -218,7 +241,7 @@
 
 /* Host frames: "$" ... "\n" @ 115200. Avoid 0x05 / 0xA0 (IAP).
  *   $I  identify     $P  telemetry     $D  dump params
- *   $S kp=300 ki=60000 obs=634 lpf=838 ff=0 vbus=48000 r=3620 l=1188 fdbk=1 dt=400 n0=0 n1=0 n2=0 n3=0 gz=0 gs=350
+ *   $S kp=300 ki=300000 obs=61 lpf=838 ff=0 vbus=48000 r=3620 l=1188 fdbk=1 dt=400 n0=0 n1=0 n2=0 n3=0 gz=0 gs=350
  *      (kp/obs/lpf/vbus/r ×1000, ki ×1000, ff ×1e6, l = µH,
  *       fdbk 0=Kp and Ki on IFB, 1=Kp on î and Ki on IFB,
  *       dt = two-edge bipolar compensation ns, 0 = off,
@@ -243,6 +266,6 @@
 #define VCM_HW_VERSION          1U   /* PCB / hardware revision */
 #define VCM_FW_VERSION_MAJOR    1U
 #define VCM_FW_VERSION_MINOR    4U
-#define VCM_FW_VERSION_PATCH    58U
+#define VCM_FW_VERSION_PATCH    67U
 
 #endif /* VCM_CONFIG_H */
