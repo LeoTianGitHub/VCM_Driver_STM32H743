@@ -1818,7 +1818,11 @@ void VCM_CurrentLoop_IRQHandler(void)
     float fdbk_i = ((g_vcm.pi_fdbk == VCM_PI_FDBK_AVG) || (g_vcm.adc_pair_ok != 0U))
                        ? g_vcm.ifb_avg_a
                        : fdbk_p;
+#if (VCM_HALF_PI_EN != 0U)
     float ts = (vcm_half_done != 0U) ? VCM_HALF_TS_S : VCM_PWM_TS_S;
+#else
+    float ts = VCM_PWM_TS_S;
+#endif
 
     vcm_half_done = 0U;
     vcm_pi_ref = ref;
@@ -1916,6 +1920,9 @@ static void VCM_TimerBApplyNow(uint16_t start, uint16_t high_cnt)
 
 void VCM_CurrentLoop_HalfIRQ(void)
 {
+#if (VCM_HALF_PI_EN == 0U)
+  return;
+#else
   uint16_t now;
   uint16_t due;
   uint16_t start_b;
@@ -2022,6 +2029,7 @@ void VCM_CurrentLoop_HalfIRQ(void)
     VCM_TimerBApplyNow(start_b, cnt_b);
   }
   vcm_half_done = 1U;
+#endif /* VCM_HALF_PI_EN */
 }
 
 void VCM_Init(void)
@@ -3316,7 +3324,11 @@ static void VCM_ConfigHalfBridge(uint32_t timer_idx, uint32_t output1, uint32_t 
   }
 
   pTimerCfg.InterruptRequests = (timer_idx == HRTIM_TIMERINDEX_TIMER_A)
+#if (VCM_HALF_PI_EN != 0U)
                                     ? (HRTIM_TIM_IT_REP | HRTIM_TIM_IT_CMP3)
+#else
+                                    ? HRTIM_TIM_IT_REP
+#endif
                                     : HRTIM_TIM_IT_NONE;
   pTimerCfg.DMARequests = HRTIM_TIM_DMA_NONE;
   pTimerCfg.DMASrcAddress = 0x0000;

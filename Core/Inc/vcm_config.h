@@ -30,8 +30,9 @@
 #define VCM_DRV_DT_NS              400U
 #define VCM_DRV_DT_NS_MAX          1000U
 #define VCM_DRV_DT_HOLD_A          0.080f
-/* Second current-loop step, applied to the −pulse of the same period.
- * The 50 kHz tick (notch, gain zone, capture, diag) stays on VCM_PWM_TS_S. */
+/* 1: after I+ coast sample, re-run PI and reshape this period's −pulse.
+ * 0: only the 50 kHz REP PI; −pulse stays as preloaded at period start. */
+#define VCM_HALF_PI_EN             0U
 #define VCM_HALF_TS_S              (VCM_PWM_TS_S * 0.5f)
 /* Both tri-level pulses stay at least this wide while the current loop
  * is closed, including at zero command. 600 ns is above the 200 ns gate
@@ -58,9 +59,8 @@
  * Closed loop keeps both pulses at least VCM_TRI_CM_NS. The current
  * command lengthens one side, so the average voltage is 2*m*Vbus.
  * There is no extra dead-time term on this waveform.
- * After the first coast sample, the −pulse is recomputed with VCM_HALF_TS_S
- * if that edge has not yet started. Feedback for the 50 kHz step is the
- * mean of the two coast samples.
+ * Feedback for the 50 kHz step is the mean of the two coast samples.
+ * Half-PI (VCM_HALF_PI_EN) is off: −pulse is not reshaped mid-period.
  */
 
 #define VCM_I_MAX_A             10.0f
@@ -266,6 +266,6 @@
 #define VCM_HW_VERSION          1U   /* PCB / hardware revision */
 #define VCM_FW_VERSION_MAJOR    1U
 #define VCM_FW_VERSION_MINOR    4U
-#define VCM_FW_VERSION_PATCH    67U
+#define VCM_FW_VERSION_PATCH    68U
 
 #endif /* VCM_CONFIG_H */
