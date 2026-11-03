@@ -5,7 +5,7 @@ namespace VcmHost;
 internal static class Protocol
 {
     public const int PwmHz = 50000;
-    public const double IMaxA = 1.0;
+    public const double IMaxA = 10.0;
     public const double VbusMin = 24.0;
     public const double VbusMax = 48.0;
 

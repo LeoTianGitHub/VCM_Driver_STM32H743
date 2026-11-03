@@ -151,6 +151,8 @@ int main(void)
   MX_HRTIM_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
+  VCM_UartRxArm();
+  VCM_BootAnnounce();
 #ifdef UID_ENCRYPTION
 	if(UID_Encryption_Key_Check((void*)KEY_BASE,
 								(void*)UID_BASE,
@@ -163,6 +165,7 @@ int main(void)
 		{
 			HAL_GPIO_TogglePin(PROCESS_LED_GPIO_Port, PROCESS_LED_Pin);
 			HAL_Delay(100);
+			VCM_PollVersionQuery();
 		}
 	}
 	else
@@ -171,8 +174,10 @@ int main(void)
 		{
 			HAL_GPIO_TogglePin(PROCESS_LED_GPIO_Port, PROCESS_LED_Pin);
 			HAL_Delay(50);
+			VCM_PollVersionQuery();
 		}
 		HAL_Delay(200);
+		VCM_PollVersionQuery();
 	}
   #endif
 
@@ -201,9 +206,9 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    IAP_ServiceUartCommand();
     VCM_ServiceDrvEnable();
     VCM_ServiceFaultClear();
-    IAP_ServiceUartCommand();
     ProcessLed_Service();
   }
   /* USER CODE END 3 */
@@ -360,7 +365,7 @@ static void MX_ADC1_Init(void)
   }
   /* USER CODE BEGIN ADC1_Init 2 */
   /* Keep in sync with VCM_Driver_H743.ioc (HRTIM ADCTRG1 + DMA circular).
-   * 16.5-cycle S&H matches VCM_ADC_SMP_DELAY. Re-apply after Cube regen. */
+   * Re-apply after Cube regen if generated block regresses to software start. */
   hadc1.Init.ExternalTrigConv = ADC_EXTERNALTRIG_HR1_ADCTRG1;
   hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_RISING;
   hadc1.Init.ConversionDataManagement = ADC_CONVERSIONDATA_DMA_CIRCULAR;

@@ -14,7 +14,7 @@
 #include <stdint.h>
 
 #define VCM_NV_MAGIC              0x314D4356UL /* 'VCM1' */
-#define VCM_NV_VERSION            10U
+#define VCM_NV_VERSION            12U
 #define VCM_NV_ADDR               0x08160000UL /* Bank 2 Sector 3 */
 #define VCM_NV_ADDR_LEGACY        0x08060000UL /* Bank 1 Sector 3, previous builds */
 #define VCM_NV_FLASH_WORD_BYTES   32U

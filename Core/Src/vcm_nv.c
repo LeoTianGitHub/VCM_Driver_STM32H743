@@ -203,6 +203,12 @@ static void VCM_NvApply(const VCM_Nv_t *nv)
     }
     g_vcm.gz_scale = sc;
   }
+  /* v11 turned full R-FF on and the axis squealed. Older slots go back to 0.
+   * v12 and later keep an explicit ff= from the host. */
+  if (nv->version < 12U)
+  {
+    g_vcm.ff_mod_per_a = 0.0f;
+  }
 }
 
 static void VCM_NvApplyLegacy64(const VCM_NvLegacy64_t *nv)
@@ -210,6 +216,7 @@ static void VCM_NvApplyLegacy64(const VCM_NvLegacy64_t *nv)
   VCM_NvApplyCore(nv->version, nv->pwm_mode, nv->kp, nv->ki, nv->i_obs_a,
                   nv->iref_lpf_a, nv->ff_mod_per_a, nv->vbus_v,
                   nv->coil_l_h, nv->coil_r_ohm, nv->pi_fdbk);
+  g_vcm.ff_mod_per_a = 0.0f;
 }
 
 static int VCM_NvImageOk(uint32_t addr)

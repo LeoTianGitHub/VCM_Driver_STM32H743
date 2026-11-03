@@ -30,6 +30,11 @@ void IAP_ServiceUartCommand(void)
       IAP_RequestBootloader();
       return;
     }
+    if (cmd == IAP_CMD_VERSION)
+    {
+      VCM_BootAnnounce();
+      continue;
+    }
 
     VCM_ServiceUartByte(cmd);
   }
