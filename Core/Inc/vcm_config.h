@@ -112,9 +112,7 @@
 #define VCM_PI_FDBK_OBS         1U
 #define VCM_PI_FDBK_DEFAULT     VCM_PI_FDBK_OBS
 
-/* Plant FF: bipolar Vcoil ≈ 2·m·Vbus. L-FF off while tuning PI.
- * Live/UART override uses the same 1st-order as analog RC (C32/C33 =
- * 49.9 Ω × 220 nF → fc≈14.5 kHz) so Live steps look like analog. */
+/* Plant FF: bipolar Vcoil ≈ 2·m·Vbus. L-FF off while tuning PI. */
 #define VCM_COIL_L_H            0.001188f
 #define VCM_COIL_R_OHM          3.62f
 #define VCM_VBUS_V              48.0f
@@ -128,7 +126,11 @@
 #define VCM_FF_MOD_PER_A        0.0f
 #define VCM_L_FF_SCALE          0.0f
 #define VCM_L_FF_MOD_PER_A      (VCM_L_FF_SCALE * VCM_COIL_L_H / (2.0f * VCM_VBUS_V))
-#define VCM_IREF_OVR_LPF_A      0.838f   /* 1-exp(-2*pi*14500/50000); Live-tunable */
+/* Command (analog IREF + Live/UART) 1st-order LPF @ 50 kHz.
+ * Default fo≈3 kHz. α = host milli step 0.314. 1-exp(-2*pi*3000/50000)=0.31404.
+ * Host $S lpf= ; α=1.0 bypasses. */
+#define VCM_IREF_LPF_HZ         3000.0f
+#define VCM_IREF_OVR_LPF_A      0.314f
 #define VCM_L_FF_DIDT_MAX       4000.0f
 
 /*
@@ -241,8 +243,9 @@
 
 /* Host frames: "$" ... "\n" @ 115200. Avoid 0x05 / 0xA0 (IAP).
  *   $I  identify     $P  telemetry     $D  dump params
- *   $S kp=300 ki=300000 obs=61 lpf=838 ff=0 vbus=48000 r=3620 l=1188 fdbk=1 dt=400 n0=0 n1=0 n2=0 n3=0 gz=0 gs=350
+ *   $S kp=300 ki=300000 obs=61 lpf=314 ff=0 vbus=48000 r=3620 l=1188 fdbk=1 dt=400 n0=0 n1=0 n2=0 n3=0 gz=0 gs=350
  *      (kp/obs/lpf/vbus/r ×1000, ki ×1000, ff ×1e6, l = µH,
+ *       lpf = command IREF LPF α, 0.314≈3 kHz @ 50 kHz, 1.0 = off,
  *       fdbk 0=Kp and Ki on IFB, 1=Kp on î and Ki on IFB,
  *       dt = two-edge bipolar compensation ns, 0 = off,
  *       n0..n3 = current-command notch Hz, 0 = off,
@@ -266,6 +269,6 @@
 #define VCM_HW_VERSION          1U   /* PCB / hardware revision */
 #define VCM_FW_VERSION_MAJOR    1U
 #define VCM_FW_VERSION_MINOR    4U
-#define VCM_FW_VERSION_PATCH    68U
+#define VCM_FW_VERSION_PATCH    69U
 
 #endif /* VCM_CONFIG_H */

@@ -19,7 +19,7 @@ dotnet run
 
 - 15 Hz 遥测：IREF、观测电流 î、单点 IFB（周期结束前 1.5 µs）、m、状态、故障、ADC
 - 约 8 s 波形：IREF / î / IFB
-- 写 RAM 参数：Kp、Ki、观测器、IREF LPF、R-FF、**Vbus / R / L**
+- 写 RAM 参数：Kp、Ki、观测器、命令 LPF（默认 3 kHz）、R-FF、**Vbus / R / L**
 - IREF 覆盖、模拟给定、Force 0.5 A、Z 等宽 dither（关 PI）
 - 三电平 / 双极性、清故障、导出 CSV
 

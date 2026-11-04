@@ -64,6 +64,7 @@ public partial class MainWindow : Window
     private readonly object _logGate = new();
     private bool _syncingIref;
     private bool _syncingObs;
+    private bool _syncingLpf;
     private bool _syncingMode;
     private DateTime _lastPoll = DateTime.MinValue;
     private bool _awaitingTl;
@@ -501,7 +502,13 @@ public partial class MainWindow : Window
 
         if (m.ContainsKey("lpf_e3"))
         {
-            LpfBox.Text = Protocol.Milli(m, "lpf_e3").ToString("0.###", CultureInfo.InvariantCulture);
+            _syncingLpf = true;
+            var a = Protocol.Milli(m, "lpf_e3");
+            LpfBox.Text = a.ToString("0.###", CultureInfo.InvariantCulture);
+            LpfHzBox.Text = a >= 0.999
+                ? "off"
+                : Protocol.AlphaToHz(a).ToString("0", CultureInfo.InvariantCulture);
+            _syncingLpf = false;
         }
 
         if (m.ContainsKey("ff_e6"))
@@ -1574,11 +1581,15 @@ public partial class MainWindow : Window
     private void ApplyUiParams(LoopParams p)
     {
         _syncingObs = true;
+        _syncingLpf = true;
         KpBox.Text = ParamFile.Fmt(p.Kp, "0.###");
         KiBox.Text = ParamFile.Fmt(p.Ki, "0.###");
         ObsBox.Text = ParamFile.Fmt(p.Obs, "0.###");
         ObsHzBox.Text = Protocol.AlphaToHz(p.Obs).ToString("0", CultureInfo.InvariantCulture);
         LpfBox.Text = ParamFile.Fmt(p.Lpf, "0.###");
+        LpfHzBox.Text = p.Lpf >= 0.999
+            ? "off"
+            : Protocol.AlphaToHz(p.Lpf).ToString("0", CultureInfo.InvariantCulture);
         FfBox.Text = ParamFile.Fmt(p.Ff, "0.#####");
         VbusBox.Text = ParamFile.Fmt(Math.Clamp(p.Vbus, Protocol.VbusMin, Protocol.VbusMax), "0.###");
         RcoilBox.Text = ParamFile.Fmt(p.R, "0.###");
@@ -1596,6 +1607,7 @@ public partial class MainWindow : Window
         FdbkObs.IsChecked = obs;
         FdbkAvg.IsChecked = !obs;
         _syncingObs = false;
+        _syncingLpf = false;
     }
 
     private void MeasureDt_Click(object sender, RoutedEventArgs e)
@@ -1634,6 +1646,49 @@ public partial class MainWindow : Window
         var a = Protocol.HzToAlpha(hz);
         ObsBox.Text = a.ToString("0.###", CultureInfo.InvariantCulture);
         _syncingObs = false;
+    }
+
+    private void LpfAlpha_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_syncingLpf || !TryParseBox(LpfBox.Text, out var a))
+        {
+            return;
+        }
+
+        _syncingLpf = true;
+        LpfHzBox.Text = a >= 0.999
+            ? "off"
+            : Protocol.AlphaToHz(a).ToString("0", CultureInfo.InvariantCulture);
+        _syncingLpf = false;
+    }
+
+    private void LpfHz_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_syncingLpf)
+        {
+            return;
+        }
+
+        var raw = LpfHzBox.Text?.Trim() ?? "";
+        if (string.Equals(raw, "off", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(raw, "0", StringComparison.Ordinal))
+        {
+            _syncingLpf = true;
+            LpfBox.Text = "1";
+            LpfHzBox.Text = "off";
+            _syncingLpf = false;
+            return;
+        }
+
+        if (!TryParseBox(raw, out var hz))
+        {
+            return;
+        }
+
+        _syncingLpf = true;
+        var a = Protocol.HzToAlpha(hz);
+        LpfBox.Text = a.ToString("0.###", CultureInfo.InvariantCulture);
+        _syncingLpf = false;
     }
 
     private void ClearLog_Click(object sender, RoutedEventArgs e) => LogBox.Clear();

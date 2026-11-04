@@ -1664,8 +1664,7 @@ void VCM_CurrentLoop_IRQHandler(void)
   {
     iref = -VCM_I_MAX_A;
   }
-  /* Live/UART F: 1st-order matching analog C32/C33. Analog path: no extra LPF. */
-  if (g_vcm.iref_override_en != 0U)
+  /* Command LPF on analog IREF and Live/UART override. α=1 bypasses. */
   {
     float a = g_vcm.iref_lpf_a;
     if (a < 0.02f)

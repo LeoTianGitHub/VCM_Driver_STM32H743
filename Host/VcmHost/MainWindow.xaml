@@ -243,7 +243,7 @@
                                 <Grid.RowDefinitions>
                                     <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
                                     <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
-                                    <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
+                                    <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
                                     <RowDefinition/><RowDefinition/>
                                 </Grid.RowDefinitions>
                                 <Label Grid.Row="0" Content="Kp"/>
@@ -263,42 +263,48 @@
                                 <Label Grid.Row="4" Content="观测 Hz"/>
                                 <TextBox x:Name="ObsHzBox" Grid.Row="4" Grid.Column="1" Margin="0,3" Text="500"
                                          LostFocus="ObsHz_Changed"/>
-                                <Label Grid.Row="5" Content="IREF LPF α"/>
-                                <TextBox x:Name="LpfBox" Grid.Row="5" Grid.Column="1" Margin="0,3" Text="0.838"/>
-                                <Label Grid.Row="6" Content="R-FF m/A"/>
-                                <TextBox x:Name="FfBox" Grid.Row="6" Grid.Column="1" Margin="0,3" Text="0"/>
-                                <Label Grid.Row="7" Content="Vbus (V)"/>
-                                <TextBox x:Name="VbusBox" Grid.Row="7" Grid.Column="1" Margin="0,3" Text="48"
+                                <Label Grid.Row="5" Content="命令 LPF α"/>
+                                <TextBox x:Name="LpfBox" Grid.Row="5" Grid.Column="1" Margin="0,3" Text="0.314"
+                                         LostFocus="LpfAlpha_Changed"
+                                         ToolTip="电流指令一阶低通 α（模拟 IREF 与 Live/UART）。1.0 关闭。"/>
+                                <Label Grid.Row="6" Content="命令 LPF Hz"/>
+                                <TextBox x:Name="LpfHzBox" Grid.Row="6" Grid.Column="1" Margin="0,3" Text="3000"
+                                         LostFocus="LpfHz_Changed"
+                                         ToolTip="默认 3000 Hz。改 Hz 会同步 α；α=1 表示关闭。"/>
+                                <Label Grid.Row="7" Content="R-FF m/A"/>
+                                <TextBox x:Name="FfBox" Grid.Row="7" Grid.Column="1" Margin="0,3" Text="0"/>
+                                <Label Grid.Row="8" Content="Vbus (V)"/>
+                                <TextBox x:Name="VbusBox" Grid.Row="8" Grid.Column="1" Margin="0,3" Text="48"
                                          ToolTip="24–48 V"/>
-                                <Label Grid.Row="8" Content="R (Ω)"/>
-                                <TextBox x:Name="RcoilBox" Grid.Row="8" Grid.Column="1" Margin="0,3" Text="3.62"/>
-                                <Label Grid.Row="9" Content="L (mH)"/>
-                                <TextBox x:Name="LcoilBox" Grid.Row="9" Grid.Column="1" Margin="0,3" Text="1.188"/>
-                                <Label Grid.Row="10" Content="t_d (ns)"/>
-                                <TextBox x:Name="DtBox" Grid.Row="10" Grid.Column="1" Margin="0,3" Text="400"
+                                <Label Grid.Row="9" Content="R (Ω)"/>
+                                <TextBox x:Name="RcoilBox" Grid.Row="9" Grid.Column="1" Margin="0,3" Text="3.62"/>
+                                <Label Grid.Row="10" Content="L (mH)"/>
+                                <TextBox x:Name="LcoilBox" Grid.Row="10" Grid.Column="1" Margin="0,3" Text="1.188"/>
+                                <Label Grid.Row="11" Content="t_d (ns)"/>
+                                <TextBox x:Name="DtBox" Grid.Row="11" Grid.Column="1" Margin="0,3" Text="400"
                                          ToolTip="双极性死区补偿，两个沿合计，默认 400 ns。0 关闭。三电平闭环时两边至少各 600 ns，指令只加长一边。开环保持时两边都关。"/>
-                                <Label Grid.Row="11" Content="陷波1 Hz"/>
-                                <TextBox x:Name="Notch0Box" Grid.Row="11" Grid.Column="1" Margin="0,3" Text="0"
+                                <Label Grid.Row="12" Content="陷波1 Hz"/>
+                                <TextBox x:Name="Notch0Box" Grid.Row="12" Grid.Column="1" Margin="0,3" Text="0"
                                          ToolTip="电流指令陷波，0 关闭。Q=5。"/>
-                                <Label Grid.Row="12" Content="陷波2 Hz"/>
-                                <TextBox x:Name="Notch1Box" Grid.Row="12" Grid.Column="1" Margin="0,3" Text="0"
+                                <Label Grid.Row="13" Content="陷波2 Hz"/>
+                                <TextBox x:Name="Notch1Box" Grid.Row="13" Grid.Column="1" Margin="0,3" Text="0"
                                          ToolTip="0 关闭"/>
-                                <Label Grid.Row="13" Content="陷波3 Hz"/>
-                                <TextBox x:Name="Notch2Box" Grid.Row="13" Grid.Column="1" Margin="0,3" Text="0"
+                                <Label Grid.Row="14" Content="陷波3 Hz"/>
+                                <TextBox x:Name="Notch2Box" Grid.Row="14" Grid.Column="1" Margin="0,3" Text="0"
                                          ToolTip="0 关闭"/>
-                                <Label Grid.Row="14" Content="陷波4 Hz"/>
-                                <TextBox x:Name="Notch3Box" Grid.Row="14" Grid.Column="1" Margin="0,3" Text="0"
+                                <Label Grid.Row="15" Content="陷波4 Hz"/>
+                                <TextBox x:Name="Notch3Box" Grid.Row="15" Grid.Column="1" Margin="0,3" Text="0"
                                          ToolTip="0 关闭"/>
-                                <Label Grid.Row="15" Content="增益" VerticalAlignment="Center"/>
-                                <WrapPanel Grid.Row="15" Grid.Column="1" Margin="0,3">
+                                <Label Grid.Row="16" Content="增益" VerticalAlignment="Center"/>
+                                <WrapPanel Grid.Row="16" Grid.Column="1" Margin="0,3">
                                     <RadioButton x:Name="GzOff" Content="单段" IsChecked="True" Margin="0,0,12,4"
                                                  GroupName="GainZone"
                                                  ToolTip="gz=0：Kp、Ki 全程不变。"/>
                                     <RadioButton x:Name="GzOn" Content="两段" Margin="0,0,12,4" GroupName="GainZone"
                                                  ToolTip="gz=1：电流指令变慢约 40 ms 后，Kp 和 Ki 同时乘静止比例。运动时约 2 ms 恢复。不看电流大小，也不看电流误差。"/>
                                 </WrapPanel>
-                                <Label Grid.Row="16" Content="静止比例"/>
-                                <TextBox x:Name="GsBox" Grid.Row="16" Grid.Column="1" Margin="0,3" Text="0.35"
+                                <Label Grid.Row="17" Content="静止比例"/>
+                                <TextBox x:Name="GsBox" Grid.Row="17" Grid.Column="1" Margin="0,3" Text="0.35"
                                          ToolTip="静止时 Kp、Ki 同乘这个数。0.35 约把 820 Hz 增益降 9 dB。"/>
                             </Grid>
                             <TextBlock Margin="0,8,0,8" Foreground="{StaticResource MuteBrush}" TextWrapping="Wrap"
