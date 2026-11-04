@@ -131,6 +131,7 @@ static uint32_t vcm_diag_t;
 static uint8_t vcm_diag_state;
 #endif
 
+VCM_ITCM
 static float VCM_Absf(float x)
 {
   return (x >= 0.0f) ? x : -x;
@@ -197,6 +198,7 @@ static void VCM_LoopStateReset(void)
  * ê is the Ke·v term missing from that model. It is applied in VCM_PiStep
  * so the integrator does not have to store it through a stop.
  */
+VCM_ITCM
 static void VCM_IobsUpdate(float ifb, uint8_t meas_ok)
 {
   float i = g_vcm.ifb_hat_a;
@@ -286,7 +288,7 @@ static void VCM_IobsUpdate(float ifb, uint8_t meas_ok)
   g_vcm.ifb_filt_a = i;
 }
 
-/* w0 stays below pi/2 for f0 <= 10 kHz at 50 kHz. */
+/* w0 stays below pi/2 for f0 <= 10 kHz at 50 kHz. Main-loop NotchDesign only. */
 static float VCM_Sin(float x)
 {
   float x2 = x * x;
@@ -300,8 +302,7 @@ static float VCM_Cos(float x)
 }
 
 /* Up to 4 series notches on the current command. 0 Hz bypasses that stage.
- * Q=5. The null sits on the requested Hz at the control sample rate.
- * The current feedback is left alone: notching it moves the squeal to a shoulder. */
+ * Q=5. Coeffs are built in VCM_NotchSync() (main / $S / NV), never in the ISR. */
 static void VCM_NotchDesign(VCM_Notch_t *n, uint16_t hz)
 {
   float w0;
@@ -336,6 +337,20 @@ static void VCM_NotchDesign(VCM_Notch_t *n, uint16_t hz)
   n->a2 = (1.0f - alpha) / a0;
 }
 
+void VCM_NotchSync(void)
+{
+  uint32_t i;
+
+  for (i = 0U; i < 4U; i++)
+  {
+    if (vcm_notch[i].hz != g_vcm.notch_hz[i])
+    {
+      VCM_NotchDesign(&vcm_notch[i], g_vcm.notch_hz[i]);
+    }
+  }
+}
+
+VCM_ITCM
 static float VCM_NotchRun(VCM_Notch_t *n, float x)
 {
   float y;
@@ -353,27 +368,26 @@ static float VCM_NotchRun(VCM_Notch_t *n, float x)
   return y;
 }
 
+VCM_ITCM
 static float VCM_IfbNotch(float x)
 {
   uint32_t i;
 
   for (i = 0U; i < 4U; i++)
   {
-    if (vcm_notch[i].hz != g_vcm.notch_hz[i])
-    {
-      VCM_NotchDesign(&vcm_notch[i], g_vcm.notch_hz[i]);
-    }
     x = VCM_NotchRun(&vcm_notch[i], x);
   }
   return x;
 }
 
 /* Duty of one minimum tri-level pulse. */
+VCM_ITCM
 static float VCM_TriCmDuty(void)
 {
   return ((float)VCM_TRI_CM_NS * (float)VCM_PWM_FREQ_HZ) * 1.0e-9f;
 }
 
+VCM_ITCM
 static float VCM_ModMax(void)
 {
   float coast;
@@ -401,6 +415,7 @@ static float VCM_ModMax(void)
  * s = 1 while the command is moving. After it stays quiet, s = gz_scale
  * on both Kp and Ki. Idle clamp optional. Back-calculation anti-windup.
  */
+VCM_ITCM
 static float VCM_GainZoneScale(float ref, float err)
 {
   float s1;
@@ -496,6 +511,7 @@ static float VCM_GainZoneScale(float ref, float err)
  * fdbk=0 passes the same sampled current for both.
  * Back-calculation anti-windup uses the applied modulation.
  */
+VCM_ITCM
 static float VCM_PiStep(float ref, float fdbk_p, float fdbk_i, float ts, uint8_t full_rate)
 {
   float err_p;
@@ -631,35 +647,56 @@ static float VCM_PiStep(float ref, float fdbk_p, float fdbk_i, float ts, uint8_t
 
   {
     float l_ff;
+    float m_ff_base;
+    float m_ff_l;
+    float aw_ref;
+    float aw;
     float vb = g_vcm.vbus_v;
     if (vb < 1.0f)
     {
       vb = 1.0f;
     }
     l_ff = VCM_L_FF_SCALE * g_vcm.coil_l_h / (2.0f * vb);
-    m_ff = (ref * g_vcm.ff_mod_per_a) + (di_dt * l_ff);
+    m_ff_base = ref * g_vcm.ff_mod_per_a;
 #if (VCM_E_OBS_EN != 0U)
-    m_ff += vcm_e_apply / (2.0f * vb);
+    m_ff_base += vcm_e_apply / (2.0f * vb);
 #endif
-  }
-  g_vcm.mod_ff = m_ff;
+    m_ff_l = di_dt * l_ff;
+    m_ff = m_ff_base + m_ff_l;
+    g_vcm.mod_ff = m_ff;
 
-  m_unsat = (kp * err_p) + g_vcm.integral + m_ff;
-  m_max = VCM_ModMax();
-  if (m_unsat > m_max)
-  {
-    m = m_max;
-  }
-  else if (m_unsat < -m_max)
-  {
-    m = -m_max;
-  }
-  else
-  {
-    m = m_unsat;
-  }
+    m_unsat = (kp * err_p) + g_vcm.integral + m_ff;
+    m_max = VCM_ModMax();
+    if (m_unsat > m_max)
+    {
+      m = m_max;
+    }
+    else if (m_unsat < -m_max)
+    {
+      m = -m_max;
+    }
+    else
+    {
+      m = m_unsat;
+    }
 
-  g_vcm.integral += (ki * err_i * ts) + (m - m_unsat);
+    /* AW tracks PI + R-FF (ê) only. A one-sample L·dI/dt clip must not dump Ki
+     * (that undershoot after a large IREF step). Kaw = VCM_PI_AW_K softens unwind. */
+    aw_ref = (kp * err_p) + g_vcm.integral + m_ff_base;
+    if (aw_ref > m_max)
+    {
+      aw = m_max - aw_ref;
+    }
+    else if (aw_ref < -m_max)
+    {
+      aw = -m_max - aw_ref;
+    }
+    else
+    {
+      aw = 0.0f;
+    }
+    g_vcm.integral += (ki * err_i * ts) + (VCM_PI_AW_K * aw);
+  }
   if (g_vcm.integral > VCM_I_INTEGRAL_LIM)
   {
     g_vcm.integral = VCM_I_INTEGRAL_LIM;
@@ -672,11 +709,13 @@ static float VCM_PiStep(float ref, float fdbk_p, float fdbk_i, float ts, uint8_t
   return m;
 }
 
+VCM_ITCM
 float VCM_AdcToIfbAmpere(uint16_t raw)
 {
   return VCM_IFB_POLARITY * ((float)raw - VCM_ADC_MID) / VCM_IFB_COUNTS_PER_A;
 }
 
+VCM_ITCM
 float VCM_AdcToIrefAmpere(uint16_t raw)
 {
   return VCM_IREF_POLARITY * ((float)raw - VCM_ADC_MID) / VCM_IREF_COUNTS_PER_A;
@@ -691,6 +730,7 @@ static void VCM_FaultPin_Set(bool fault_active)
 /* Place the S&H window in the middle of zero-vector [z0, z1]. The whole
  * window stays at least 1 µs from both edges. CMP2 is the trigger, which
  * is one S&H time before the hold instant. */
+VCM_ITCM
 static uint16_t VCM_AdcTrigForZero(uint16_t z0, uint16_t z1)
 {
   uint32_t guard = (uint32_t)VCM_ADC_EDGE_GUARD_CNT;
@@ -795,6 +835,7 @@ static void VCM_HRTIM_WriteAdcTrigs(uint16_t trig_a, uint16_t trig_b)
 /* Two S&H windows inside one zero vector, split around its center.
  * Bipolar has only the trailing coast; both triggers stay there so the
  * two-deep DMA still completes once per period. */
+VCM_ITCM
 static void VCM_HRTIM_SetAdcPhase(uint16_t z0, uint16_t z1)
 {
   uint16_t trig = VCM_AdcTrigForZero(z0, z1);
@@ -806,6 +847,7 @@ static void VCM_HRTIM_SetAdcPhase(uint16_t z0, uint16_t z1)
 }
 
 /* One S&H in each coast. CMP2 is the earlier coast, CMP4 the later one. */
+VCM_ITCM
 static void VCM_HRTIM_SetAdcPhasePair(uint16_t z0a, uint16_t z1a,
                                       uint16_t z0b, uint16_t z1b)
 {
@@ -822,6 +864,7 @@ static void VCM_HRTIM_SetAdcPhasePair(uint16_t z0a, uint16_t z1a,
   VCM_HRTIM_WriteAdcTrigs(t0, t1);
 }
 
+VCM_ITCM
 static void VCM_HRTIM_SetAdcPhaseIdle(void)
 {
   VCM_HRTIM_SetAdcPhase((uint16_t)(VCM_PWM_PERIOD / 2U), VCM_PWM_PERIOD);
@@ -864,6 +907,7 @@ int VCM_AdcStart(void)
 
 /* DMA length-2 TC: I+ then I− are both in memory. Do not run PI here —
  * latch only; the 50 kHz REP consumes the snapshot. */
+VCM_ITCM
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 {
   uint32_t seq;
@@ -881,6 +925,7 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
   vcm_pair_seq = seq + 1U; /* even = stable */
 }
 
+VCM_ITCM
 static void VCM_HRTIM_SetChop(uint32_t timer_idx, uint8_t chop)
 {
   uint8_t *prev;
@@ -907,6 +952,7 @@ static void VCM_HRTIM_SetChop(uint32_t timer_idx, uint8_t chop)
   }
 }
 
+VCM_ITCM
 static void VCM_HRTIM_InvalidateChop(void)
 {
   vcm_chop_a = 0xFFU;
@@ -914,6 +960,7 @@ static void VCM_HRTIM_InvalidateChop(void)
 }
 
 /* HS pulse at start of period: high [0, high_cnt). */
+VCM_ITCM
 static void VCM_HRTIM_PulseStart(uint32_t timer_idx, uint16_t high_cnt)
 {
   HRTIM_Timerx_TypeDef *tim = &hhrtim.Instance->sTimerxRegs[timer_idx];
@@ -923,6 +970,7 @@ static void VCM_HRTIM_PulseStart(uint32_t timer_idx, uint16_t high_cnt)
 }
 
 /* HS pulse at [start, start+high_cnt). Reset on CMP2, never on PER. */
+VCM_ITCM
 static void VCM_HRTIM_PulseWindow(uint32_t timer_idx, uint16_t start, uint16_t high_cnt)
 {
   uint16_t end;
@@ -949,6 +997,7 @@ static void VCM_HRTIM_PulseWindow(uint32_t timer_idx, uint16_t start, uint16_t h
 }
 
 /* High side stays off, so the complementary low side freewheels. */
+VCM_ITCM
 static void VCM_HRTIM_PulseOff(uint32_t timer_idx)
 {
   HRTIM_Timerx_TypeDef *tim = &hhrtim.Instance->sTimerxRegs[timer_idx];
@@ -958,6 +1007,7 @@ static void VCM_HRTIM_PulseOff(uint32_t timer_idx)
 }
 
 /* HRTIM counts for the external gate-driver blanking. 500 ns → 240 counts. */
+VCM_ITCM
 static uint16_t VCM_DrvDtCounts(void)
 {
   uint32_t ns = g_vcm.drv_dt_ns;
@@ -970,6 +1020,7 @@ static uint16_t VCM_DrvDtCounts(void)
 }
 
 /* Keep the last sign through zero so compensation does not flip with noise. */
+VCM_ITCM
 static int8_t VCM_DrvDtSign(float i_a)
 {
   if (i_a > VCM_DRV_DT_HOLD_A)
@@ -984,6 +1035,7 @@ static int8_t VCM_DrvDtSign(float i_a)
 }
 
 /* User bipolar stays bipolar. Tri-level stays tri-level. */
+VCM_ITCM
 static void VCM_SelectRunMode(float iref)
 {
   (void)iref;
@@ -995,6 +1047,7 @@ static void VCM_SelectRunMode(float iref)
  * UART Z (open-loop hold) leaves both off.
  * Bipolar 0.5+/-m only if pwm_mode is bipolar.
  */
+VCM_ITCM
 static void VCM_HRTIM_ApplyDuty(float m)
 {
   uint16_t cmp_a;
@@ -1300,6 +1353,7 @@ static void VCM_DtCalFinish(void)
   vcm_dt_msg = 1U;
 }
 
+VCM_ITCM
 static void VCM_DtCalSample(void)
 {
   if (vcm_dt_cal == 0U)
@@ -1396,6 +1450,7 @@ void VCM_EnterFault(uint32_t flag)
   VCM_Stop();
 }
 
+VCM_ITCM
 bool VCM_IsDrvEnActive(void)
 {
   return (HAL_GPIO_ReadPin(VCM_DRV_EN_GPIO_Port, VCM_DRV_EN_Pin) == VCM_DRV_EN_ACTIVE_LEVEL);
@@ -1505,6 +1560,7 @@ void VCM_Start(void)
  *   small number  -> loop and plant are fine, the delay is upstream
  *   large number  -> the lag really is inside the loop/plant
  */
+VCM_ITCM
 static void VCM_DiagService(void)
 {
   float step;
@@ -1566,6 +1622,7 @@ static void VCM_DiagService(void)
 }
 #endif /* VCM_DIAG_EN */
 
+VCM_ITCM
 void VCM_CurrentLoop_IRQHandler(void)
 {
   float m;
@@ -1844,6 +1901,7 @@ void VCM_CurrentLoop_IRQHandler(void)
 
 /* −pulse for a +pulse that has already been scheduled. The coasts stay
  * long enough for the two samples. */
+VCM_ITCM
 static uint8_t VCM_TriSecondPulse(float m_dt, uint16_t cnt_a, uint16_t dcm_cnt,
                                   uint16_t *start_b, uint16_t *cnt_b)
 {
@@ -1902,6 +1960,7 @@ static uint8_t VCM_TriSecondPulse(float m_dt, uint16_t cnt_a, uint16_t dcm_cnt,
 
 /* Push Timer B's −pulse into the active registers now. The preload is put
  * back afterwards so the next master update still loads the following period. */
+VCM_ITCM
 static void VCM_TimerBApplyNow(uint16_t start, uint16_t high_cnt)
 {
   HRTIM_Timerx_TypeDef *tim = &hhrtim.Instance->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_B];
@@ -1918,6 +1977,7 @@ static void VCM_TimerBApplyNow(uint16_t start, uint16_t high_cnt)
   __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_B, HRTIM_COMPAREUNIT_2, vcm_next_b2);
 }
 
+VCM_ITCM
 void VCM_CurrentLoop_HalfIRQ(void)
 {
 #if (VCM_HALF_PI_EN == 0U)
@@ -2078,6 +2138,7 @@ void VCM_Init(void)
   g_vcm.gz_scale = VCM_GZ_SCALE_DEFAULT;
   g_vcm.gz_hold = 0U;
   (void)VCM_NvLoad();
+  VCM_NotchSync();
   g_vcm.state = VCM_STATE_IDLE;
   g_vcm.fault_flags = 0U;
   g_vcm.adc1_ovr_cnt = 0U;
@@ -2625,6 +2686,10 @@ static void VCM_HostSet(const char *p, const char *end)
   {
     VCM_PlantSyncFf();
   }
+  if (nset != 0U)
+  {
+    VCM_NotchSync();
+  }
 
   VCM_UartWrite((nset != 0U) ? "OK\r\n" : "ERR\r\n");
 }
@@ -2864,6 +2929,7 @@ static uint32_t VCM_CapContMaxHz(void)
 }
 
 /* One control tick. Stores iref and ifb; UART drain stays in the main loop. */
+VCM_ITCM
 static void VCM_CapPush(void)
 {
   uint32_t wr;

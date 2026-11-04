@@ -209,6 +209,7 @@ static void VCM_NvApply(const VCM_Nv_t *nv)
   {
     g_vcm.ff_mod_per_a = 0.0f;
   }
+  VCM_NotchSync();
 }
 
 static void VCM_NvApplyLegacy64(const VCM_NvLegacy64_t *nv)
@@ -217,6 +218,7 @@ static void VCM_NvApplyLegacy64(const VCM_NvLegacy64_t *nv)
                   nv->iref_lpf_a, nv->ff_mod_per_a, nv->vbus_v,
                   nv->coil_l_h, nv->coil_r_ohm, nv->pi_fdbk);
   g_vcm.ff_mod_per_a = 0.0f;
+  VCM_NotchSync();
 }
 
 static int VCM_NvImageOk(uint32_t addr)
@@ -457,6 +459,7 @@ int VCM_NvFactory(void)
   g_vcm.gz_en = VCM_GZ_EN_DEFAULT;
   g_vcm.gz_scale = VCM_GZ_SCALE_DEFAULT;
   g_vcm.gz_hold = 0U;
+  VCM_NotchSync();
 
   return err;
 }

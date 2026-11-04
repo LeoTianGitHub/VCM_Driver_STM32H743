@@ -9,6 +9,13 @@
 #include "vcm_config.h"
 #include <stdbool.h>
 
+/* Place current-loop hot path in ITCMRAM (copied from Flash at reset). */
+#if defined(__GNUC__)
+#define VCM_ITCM __attribute__((section(".itcm_text")))
+#else
+#define VCM_ITCM
+#endif
+
 typedef enum
 {
   VCM_STATE_INIT = 0,
@@ -89,6 +96,8 @@ extern UART_HandleTypeDef huart1;
 
 void VCM_Init(void);
 void VCM_PlantSyncFf(void);
+/** Rebuild command-notch biquad coeffs (main loop / $S / NV — not from the ISR). */
+void VCM_NotchSync(void);
 void VCM_HRTIM_InitTimers(void);
 void VCM_Start(void);
 void VCM_Stop(void);

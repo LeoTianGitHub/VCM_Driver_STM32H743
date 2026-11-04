@@ -139,6 +139,19 @@ SECTIONS
     . = ALIGN(4);
   } >ROM
 
+  /* Current-loop hot path: load from Flash, run from ITCM (zero wait).
+   * Reset_Handler copies [_sitcm_text, _eitcm_text) from _siitcm_text. */
+  .itcm_text :
+  {
+    . = ALIGN(4);
+    _sitcm_text = .;
+    *(.itcm_text)
+    *(.itcm_text*)
+    . = ALIGN(4);
+    _eitcm_text = .;
+  } >ITCMRAM AT> ROM
+  _siitcm_text = LOADADDR(.itcm_text);
+
   /* Used by the startup to initialize data */
   _sidata = LOADADDR(.data);
 
@@ -149,8 +162,8 @@ SECTIONS
     _sdata = .;        /* create a global symbol at data start */
     *(.data)           /* .data sections */
     *(.data*)          /* .data* sections */
-    *(.RamFunc)        /* .RamFunc sections */
-    *(.RamFunc*)       /* .RamFunc* sections */
+    *(.RamFunc)        /* .RamFunc sections — DTCM, not ITCM */
+    *(.RamFunc*)
 
     . = ALIGN(4);
     _edata = .;        /* define a global symbol at data end */

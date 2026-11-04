@@ -222,6 +222,7 @@ void DMA1_Stream1_IRQHandler(void)
 /**
   * @brief This function handles HRTIM timer A global interrupt.
   */
+VCM_ITCM
 void HRTIM1_TIMA_IRQHandler(void)
 {
   /* USER CODE BEGIN HRTIM1_TIMA_IRQn 0 */

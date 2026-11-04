@@ -2,7 +2,7 @@
  * @file    vcm_config.h
  * @brief   VCM current loop - PI + R/L FF, three-level PWM @ 50 kHz
  *
- * Wire-feed plant: 1 A, 912 µH, 5.42 Ω.
+ * Wire-feed plant: 1 A, 912 µH, 5.42 Ω, IFB Rs 200 mΩ.
  * Current-loop control matches Z驱动 fw 1.4.68.
  */
 #ifndef VCM_CONFIG_H
@@ -71,8 +71,9 @@
 #define VCM_ADC_VREF_V          3.0f
 #define VCM_ADC_COUNTS_PER_V    (VCM_ADC_MID / VCM_ADC_VREF_V)
 
-/* IFB: RS + TPA8001 → ADC1. Adjust GAIN_TRIM after clamp meter vs g_vcm.ifb_a */
-#define VCM_IFB_RS_OHM          0.020f
+/* IFB: RS + TPA8001 → ADC1. Adjust GAIN_TRIM after clamp meter vs g_vcm.ifb_a.
+ * 200 mΩ × 8.2 ≈ 1.64 V/A → ~±1 A fills the same ADC span as Z @ 10 A / 20 mΩ. */
+#define VCM_IFB_RS_OHM          0.200f
 #define VCM_IFB_TPA8001_GAIN    8.2f
 #define VCM_IFB_GAIN_TRIM       1.0f
 #define VCM_IFB_V_PER_A         (VCM_IFB_GAIN_TRIM * VCM_IFB_TPA8001_GAIN * VCM_IFB_RS_OHM)
@@ -94,6 +95,9 @@
 #define VCM_KP                  0.30f
 #define VCM_KI                  300.0f
 #define VCM_I_INTEGRAL_LIM      0.30f
+/* Back-calc anti-windup gain on the PI(+R-FF) path only. 1 = full unwind;
+ * <1 softens recovery. L-FF one-sample spikes are excluded from AW (see PiStep). */
+#define VCM_PI_AW_K             0.25f
 
 /* Two-zone PI. Motion uses Kp/Ki. After the current command has been
  * quiet for ENTER, both gains scale by GZ_SCALE. Exit on command slope
@@ -252,6 +256,6 @@
 #define VCM_HW_VERSION          1U   /* PCB / hardware revision */
 #define VCM_FW_VERSION_MAJOR    1U
 #define VCM_FW_VERSION_MINOR    4U
-#define VCM_FW_VERSION_PATCH    68U
+#define VCM_FW_VERSION_PATCH    71U
 
 #endif /* VCM_CONFIG_H */
