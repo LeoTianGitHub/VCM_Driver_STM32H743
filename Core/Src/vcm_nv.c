@@ -20,8 +20,8 @@
 #include <stddef.h>
 #include <string.h>
 
-/* Fixed prefix is 20×uint32 = 80 B; rsv fills the rest of the 256 B image. */
-#define VCM_NV_FIXED_U32  20U
+/* Fixed prefix is 21×uint32 = 84 B; rsv fills the rest of the 256 B image. */
+#define VCM_NV_FIXED_U32  21U
 
 typedef struct
 {
@@ -42,6 +42,7 @@ typedef struct
   uint32_t notch_hz[4]; /* Hz, 0 = off. version >= 9 */
   uint32_t gz_en;       /* 0 = one PI zone, 1 = standstill scale. version >= 10 */
   float gz_scale;
+  uint32_t tri_cm_ns;   /* tri-level min pulse ns. version >= 13 */
   uint32_t rsv[(VCM_NV_BYTES / 4U) - VCM_NV_FIXED_U32];
 } VCM_Nv_t;
 
@@ -132,6 +133,7 @@ static void VCM_NvCapture(VCM_Nv_t *nv)
   }
   nv->gz_en = (uint32_t)g_vcm.gz_en;
   nv->gz_scale = g_vcm.gz_scale;
+  nv->tri_cm_ns = (uint32_t)g_vcm.tri_cm_ns;
   nv->crc = VCM_NvCrcBytes((const uint8_t *)nv, sizeof(*nv));
 }
 
@@ -208,6 +210,19 @@ static void VCM_NvApply(const VCM_Nv_t *nv)
   if (nv->version < 12U)
   {
     g_vcm.ff_mod_per_a = 0.0f;
+  }
+  if (nv->version >= 13U)
+  {
+    uint32_t ns = nv->tri_cm_ns;
+    if (ns < VCM_TRI_CM_NS_MIN)
+    {
+      ns = VCM_TRI_CM_NS_MIN;
+    }
+    if (ns > VCM_TRI_CM_NS_MAX)
+    {
+      ns = VCM_TRI_CM_NS_MAX;
+    }
+    g_vcm.tri_cm_ns = (uint16_t)ns;
   }
   VCM_NotchSync();
 }
@@ -452,6 +467,7 @@ int VCM_NvFactory(void)
   g_vcm.pwm_mode = VCM_PWM_MODE;
   g_vcm.pi_fdbk = VCM_PI_FDBK_DEFAULT;
   g_vcm.drv_dt_ns = VCM_DRV_DT_NS;
+  g_vcm.tri_cm_ns = VCM_TRI_CM_NS;
   g_vcm.notch_hz[0] = 0U;
   g_vcm.notch_hz[1] = 0U;
   g_vcm.notch_hz[2] = 0U;

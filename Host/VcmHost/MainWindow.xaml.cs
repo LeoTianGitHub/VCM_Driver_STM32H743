@@ -544,6 +544,12 @@ public partial class MainWindow : Window
             DtBox.Text = Protocol.Int(m, "dt_ns").ToString(CultureInfo.InvariantCulture);
         }
 
+        if (m.ContainsKey("cm_ns"))
+        {
+            CmBox.Text = Math.Clamp(Protocol.Int(m, "cm_ns"), Protocol.TriCmNsMin, Protocol.TriCmNsMax)
+                .ToString(CultureInfo.InvariantCulture);
+        }
+
         if (m.ContainsKey("n0"))
         {
             Notch0Box.Text = Protocol.Int(m, "n0").ToString(CultureInfo.InvariantCulture);
@@ -1549,6 +1555,7 @@ public partial class MainWindow : Window
             !TryParseBox(RcoilBox.Text, out var rOhm) ||
             !TryParseBox(LcoilBox.Text, out var lMh) ||
             !TryParseBox(DtBox.Text, out var dtNs) ||
+            !TryParseBox(CmBox.Text, out var cmNs) ||
             !TryParseBox(Notch0Box.Text, out var n0) ||
             !TryParseBox(Notch1Box.Text, out var n1) ||
             !TryParseBox(Notch2Box.Text, out var n2) ||
@@ -1568,6 +1575,7 @@ public partial class MainWindow : Window
         p.LMh = lMh;
         p.Fdbk = FdbkObs.IsChecked == true ? 1 : 0;
         p.DtNs = (int)Math.Clamp(Math.Round(dtNs), 0, 1000);
+        p.CmNs = (int)Math.Clamp(Math.Round(cmNs), Protocol.TriCmNsMin, Protocol.TriCmNsMax);
         p.N0 = ClampNotch(n0);
         p.N1 = ClampNotch(n1);
         p.N2 = ClampNotch(n2);
@@ -1595,6 +1603,8 @@ public partial class MainWindow : Window
         RcoilBox.Text = ParamFile.Fmt(p.R, "0.###");
         LcoilBox.Text = ParamFile.Fmt(p.LMh, "0.###");
         DtBox.Text = Math.Clamp(p.DtNs, 0, 1000).ToString(CultureInfo.InvariantCulture);
+        CmBox.Text = Math.Clamp(p.CmNs <= 0 ? 300 : p.CmNs, Protocol.TriCmNsMin, Protocol.TriCmNsMax)
+            .ToString(CultureInfo.InvariantCulture);
         Notch0Box.Text = ClampNotch(p.N0).ToString(CultureInfo.InvariantCulture);
         Notch1Box.Text = ClampNotch(p.N1).ToString(CultureInfo.InvariantCulture);
         Notch2Box.Text = ClampNotch(p.N2).ToString(CultureInfo.InvariantCulture);
@@ -1619,7 +1629,7 @@ public partial class MainWindow : Window
     private void SendParams(LoopParams p)
     {
         var vbus = Math.Clamp(p.Vbus, Protocol.VbusMin, Protocol.VbusMax);
-        _link.Send(Protocol.SetLine(p.Kp, p.Ki, p.Obs, p.Lpf, p.Ff, vbus, p.R, p.LMh * 0.001, p.Fdbk, p.DtNs, p.N0, p.N1, p.N2, p.N3, p.Gz, p.Gs));
+        _link.Send(Protocol.SetLine(p.Kp, p.Ki, p.Obs, p.Lpf, p.Ff, vbus, p.R, p.LMh * 0.001, p.Fdbk, p.DtNs, p.CmNs, p.N0, p.N1, p.N2, p.N3, p.Gz, p.Gs));
         AppendLog("写入参数");
     }
 

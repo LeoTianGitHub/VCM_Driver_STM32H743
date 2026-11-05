@@ -43,6 +43,9 @@ internal sealed class LoopParams
     [JsonPropertyName("dt_ns")]
     public int DtNs { get; set; } = 400;
 
+    [JsonPropertyName("cm_ns")]
+    public int CmNs { get; set; } = 300;
+
     [JsonPropertyName("n0")]
     public int N0 { get; set; }
 

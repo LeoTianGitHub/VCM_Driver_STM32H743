@@ -380,11 +380,21 @@ static float VCM_IfbNotch(float x)
   return x;
 }
 
-/* Duty of one minimum tri-level pulse. */
+/* Duty of one minimum tri-level pulse (host $S cm= / g_vcm.tri_cm_ns). */
 VCM_ITCM
 static float VCM_TriCmDuty(void)
 {
-  return ((float)VCM_TRI_CM_NS * (float)VCM_PWM_FREQ_HZ) * 1.0e-9f;
+  uint32_t ns = g_vcm.tri_cm_ns;
+
+  if (ns < VCM_TRI_CM_NS_MIN)
+  {
+    ns = VCM_TRI_CM_NS_MIN;
+  }
+  if (ns > VCM_TRI_CM_NS_MAX)
+  {
+    ns = VCM_TRI_CM_NS_MAX;
+  }
+  return ((float)ns * (float)VCM_PWM_FREQ_HZ) * 1.0e-9f;
 }
 
 VCM_ITCM
@@ -2129,6 +2139,7 @@ void VCM_Init(void)
   g_vcm.coil_r_ohm = VCM_COIL_R_OHM;
   g_vcm.pi_fdbk = VCM_PI_FDBK_DEFAULT;
   g_vcm.drv_dt_ns = VCM_DRV_DT_NS;
+  g_vcm.tri_cm_ns = VCM_TRI_CM_NS;
   g_vcm.notch_hz[0] = 0U;
   g_vcm.notch_hz[1] = 0U;
   g_vcm.notch_hz[2] = 0U;
@@ -2517,6 +2528,8 @@ static void VCM_HostDump(void)
   VCM_UartWriteI32((int32_t)g_vcm.pi_fdbk);
   VCM_UartWrite(" dt_ns=");
   VCM_UartWriteI32((int32_t)g_vcm.drv_dt_ns);
+  VCM_UartWrite(" cm_ns=");
+  VCM_UartWriteI32((int32_t)g_vcm.tri_cm_ns);
   VCM_UartWrite(" n0=");
   VCM_UartWriteI32((int32_t)g_vcm.notch_hz[0]);
   VCM_UartWrite(" n1=");
@@ -2642,6 +2655,19 @@ static void VCM_HostSet(const char *p, const char *end)
         v = (int32_t)VCM_DRV_DT_NS_MAX;
       }
       g_vcm.drv_dt_ns = (uint16_t)v;
+      nset++;
+    }
+    else if ((klen == 2U) && (key[0] == 'c') && (key[1] == 'm'))
+    {
+      if (v < (int32_t)VCM_TRI_CM_NS_MIN)
+      {
+        v = (int32_t)VCM_TRI_CM_NS_MIN;
+      }
+      if (v > (int32_t)VCM_TRI_CM_NS_MAX)
+      {
+        v = (int32_t)VCM_TRI_CM_NS_MAX;
+      }
+      g_vcm.tri_cm_ns = (uint16_t)v;
       nset++;
     }
     else if ((klen == 2U) && (key[0] == 'n') &&

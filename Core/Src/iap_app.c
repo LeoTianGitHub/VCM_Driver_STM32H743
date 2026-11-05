@@ -13,6 +13,13 @@ void IAP_RequestBootloader(void)
   /* Stop motor drive before reset so outputs are safe */
   VCM_Stop();
 
+  /* Let the host finish the 0xA0 transaction and reopen COM after the
+   * USB-UART blip. Boot waits several seconds for 0x05; this delay keeps
+   * the reset from racing the tool's "enter boot OK → start transfer". */
+  (void)HAL_UART_AbortReceive(&huart1);
+  (void)HAL_UART_AbortTransmit(&huart1);
+  HAL_Delay(300);
+
   __disable_irq();
   HAL_DeInit();
   NVIC_SystemReset();

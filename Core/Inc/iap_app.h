@@ -8,7 +8,9 @@
  *   0x08160000  Parameter sector (Bank 2 Sector 3), not erased by IAP
  *
  * IAP UART: USART1 @ 115200, PB14=TX, PB15=RX (bootloader must use the same pins)
- * Host: after reset / LED blink, send 0x05 within ~3s to start encrypted upgrade.
+ * Host: after reset / LED blink, send 0x05 within the Boot wait window
+ * (IAP_UartSTM32H743: 8 s) to start encrypted upgrade. App delays ~300 ms
+ * after 0xA0 before reset so USB-UART can settle.
  */
 #ifndef IAP_APP_H
 #define IAP_APP_H

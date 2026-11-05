@@ -25,8 +25,8 @@
 
 /* Bipolar compensation, two edges. $K measures this width.
  * $S dt=<ns>, 0 disables it. HRTIM dead-time registers stay 0.
- * Tri-level does not use this value. Both pulses already stay at
- * VCM_TRI_CM_NS, which covers the gate edge. */
+ * Tri-level does not use this value. Both pulses already stay at least
+ * g_vcm.tri_cm_ns (default VCM_TRI_CM_NS), which covers the gate edge. */
 #define VCM_DRV_DT_NS              400U
 #define VCM_DRV_DT_NS_MAX          1000U
 #define VCM_DRV_DT_HOLD_A          0.080f
@@ -35,11 +35,12 @@
 #define VCM_HALF_PI_EN             0U
 #define VCM_HALF_TS_S              (VCM_PWM_TS_S * 0.5f)
 /* Both tri-level pulses stay at least this wide while the current loop
- * is closed, including at zero command. 600 ns is above the 200 ns gate
- * edge, so blanking cannot swallow either pulse. At 48 V the ripple is
- * about 24 mA peak to peak. The command only lengthens one side.
- * Open-loop hold (UART Z) keeps both pulses off. */
-#define VCM_TRI_CM_NS              600U
+ * is closed, including at zero command. Default 300 ns (above ~200 ns gate).
+ * Host $S cm=<ns>; Live / $D / Flash. At 48 V / ~1.2 mH, 300 ns → ~12 mA p-p.
+ * The command only lengthens one side. UART Z holds both pulses off. */
+#define VCM_TRI_CM_NS              300U
+#define VCM_TRI_CM_NS_MIN          200U
+#define VCM_TRI_CM_NS_MAX          2000U
 /* $K: bipolar, t_d forced to 0, PI at ±0.2 A then ±0.6 A. Axis must be still. */
 #define VCM_DT_CAL_I1_A            0.20f
 #define VCM_DT_CAL_I2_A            0.60f
@@ -56,7 +57,7 @@
 
 /*
  * Three-level, one period: +V pulse, coast, -V pulse, coast.
- * Closed loop keeps both pulses at least VCM_TRI_CM_NS. The current
+ * Closed loop keeps both pulses at least g_vcm.tri_cm_ns. The current
  * command lengthens one side, so the average voltage is 2*m*Vbus.
  * There is no extra dead-time term on this waveform.
  * Feedback for the 50 kHz step is the mean of the two coast samples.
@@ -246,11 +247,12 @@
 
 /* Host frames: "$" ... "\n" @ 115200. Avoid 0x05 / 0xA0 (IAP).
  *   $I  identify     $P  telemetry     $D  dump params
- *   $S kp=300 ki=300000 obs=61 lpf=314 ff=0 vbus=48000 r=3620 l=1188 fdbk=1 dt=400 n0=0 n1=0 n2=0 n3=0 gz=0 gs=350
+ *   $S kp=300 ki=300000 obs=61 lpf=314 ff=0 vbus=48000 r=3620 l=1188 fdbk=1 dt=400 cm=300 n0=0 n1=0 n2=0 n3=0 gz=0 gs=350
  *      (kp/obs/lpf/vbus/r ×1000, ki ×1000, ff ×1e6, l = µH,
  *       lpf = command IREF LPF α, 0.314≈3 kHz @ 50 kHz, 1.0 = off,
  *       fdbk 0=Kp and Ki on IFB, 1=Kp on î and Ki on IFB,
  *       dt = two-edge bipolar compensation ns, 0 = off,
+ *       cm = tri-level min pulse ns (both sides), 200..2000, default 300,
  *       n0..n3 = current-command notch Hz, 0 = off,
  *       gz 0=one PI zone 1=standstill scale, gs = standstill scale ×1000)
  *   $R <mA>  IREF override (PI on)   $Z $A $F $B $T $C $G as lines too
@@ -272,6 +274,6 @@
 #define VCM_HW_VERSION          1U   /* PCB / hardware revision */
 #define VCM_FW_VERSION_MAJOR    1U
 #define VCM_FW_VERSION_MINOR    4U
-#define VCM_FW_VERSION_PATCH    70U
+#define VCM_FW_VERSION_PATCH    71U
 
 #endif /* VCM_CONFIG_H */

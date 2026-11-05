@@ -69,6 +69,7 @@ typedef struct
   uint8_t pi_fdbk;            /* VCM_PI_FDBK_*: 0=ifb_avg 1=ifb_hat */
   uint8_t pwm_mode;           /* VCM_PWM_MODE_*; Live Expr / UART B|T */
   uint16_t drv_dt_ns;         /* dead-time compensation width, ns; 0 = off */
+  uint16_t tri_cm_ns;         /* tri-level min pulse both sides, ns */
   uint16_t notch_hz[4];       /* current-command notches, Hz; 0 = off */
   float gz_scale;             /* standstill Kp/Ki scale, 0.05..1 */
   uint8_t gz_en;              /* 0 = one zone, 1 = lower gain when command is quiet */
