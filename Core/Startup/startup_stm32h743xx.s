@@ -43,6 +43,10 @@ defined in linker script */
 .word  _sbss
 /* end address for the .bss section. defined in linker script */
 .word  _ebss
+/* ITCM code image (Flash load → ITCMRAM). Defined in linker script. */
+.word  _siitcm_text
+.word  _sitcm_text
+.word  _eitcm_text
 /* stack used for SystemInit_ExtMemCtl; always internal RAM used */
 
 /**
@@ -64,6 +68,23 @@ Reset_Handler:
   bl  ExitRun0Mode
 /* Call the clock system initialization function.*/
   bl  SystemInit
+
+/* Copy .itcm_text from Flash into ITCMRAM (0x00000000) before any hot-path call. */
+  ldr r0, =_sitcm_text
+  ldr r1, =_eitcm_text
+  ldr r2, =_siitcm_text
+  movs r3, #0
+  b LoopCopyItcmInit
+
+CopyItcmInit:
+  ldr r4, [r2, r3]
+  str r4, [r0, r3]
+  adds r3, r3, #4
+
+LoopCopyItcmInit:
+  adds r4, r0, r3
+  cmp r4, r1
+  bcc CopyItcmInit
 
 /* Copy the data segment initializers from flash to SRAM */
   ldr r0, =_sdata

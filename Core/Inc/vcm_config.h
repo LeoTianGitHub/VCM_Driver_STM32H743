@@ -94,6 +94,9 @@
 #define VCM_KP                  0.30f
 #define VCM_KI                  300.0f
 #define VCM_I_INTEGRAL_LIM      0.30f
+/* Back-calc anti-windup gain on the PI(+R-FF) path only. 1 = full unwind;
+ * <1 softens recovery. L-FF one-sample spikes are excluded from AW (see PiStep). */
+#define VCM_PI_AW_K             0.25f
 
 /* Two-zone PI. Motion uses Kp/Ki. After the current command has been
  * quiet for ENTER, both gains scale by GZ_SCALE. Exit on command slope
@@ -269,6 +272,6 @@
 #define VCM_HW_VERSION          1U   /* PCB / hardware revision */
 #define VCM_FW_VERSION_MAJOR    1U
 #define VCM_FW_VERSION_MINOR    4U
-#define VCM_FW_VERSION_PATCH    69U
+#define VCM_FW_VERSION_PATCH    70U
 
 #endif /* VCM_CONFIG_H */

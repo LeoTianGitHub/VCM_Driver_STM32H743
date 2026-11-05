@@ -121,8 +121,10 @@ int main(void)
 
   /* USER CODE BEGIN Init */
   /* Same as a typical H7 bootloader: keep I-cache on so Flash program
-   * does not re-fetch Bank 1 after PG is set. Do not enable D-cache here —
-   * ADC DMA buffers are not marked non-cacheable. */
+   * does not re-fetch Bank 1 after PG is set. Invalidate first so the
+   * Reset_Handler ITCMRAM code copy is fetched cleanly. Do not enable
+   * D-cache — ADC DMA buffers are not marked non-cacheable. */
+  SCB_InvalidateICache();
   SCB_EnableICache();
   /* USER CODE END Init */
 
