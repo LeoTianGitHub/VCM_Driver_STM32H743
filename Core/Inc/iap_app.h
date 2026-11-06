@@ -26,7 +26,7 @@
 #define IAP_CMD_UPGRADE          0x05U
 /** App may also accept this on USART1 to request reboot into bootloader */
 #define IAP_CMD_ENTER_BOOT       0xA0U
-/** Host asks the running app for its version. Reply is "1.4.60\\r\\n". */
+/** Host asks the running app for its version. Reply is "1.4.91\\r\\n". */
 #define IAP_CMD_VERSION          0x07U
 
 void IAP_RequestBootloader(void);

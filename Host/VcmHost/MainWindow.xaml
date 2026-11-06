@@ -184,11 +184,15 @@
                                 <ColumnDefinition Width="90"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <Label Content="IREF 覆盖 (A)"/>
+                            <Label Content="IREF 覆盖 (A)"
+                                   ToolTip="拖动滑条松手即下发；$R。Force/零位会同步此框。模拟给定后以左上 IREF 为准。"/>
                             <Slider x:Name="IrefSlider" Grid.Column="1" Minimum="-10" Maximum="10"
                                     TickFrequency="0.5" IsSnapToTickEnabled="False"
-                                    ValueChanged="IrefSlider_Changed" VerticalAlignment="Center" Margin="8,0"/>
-                            <TextBox x:Name="IrefCmdBox" Grid.Column="2" Text="0.000"/>
+                                    ValueChanged="IrefSlider_Changed" VerticalAlignment="Center" Margin="8,0"
+                                    ToolTip="松手后发送 $R；仅拖动不松手不会下发。"/>
+                            <TextBox x:Name="IrefCmdBox" Grid.Column="2" Text="0.000"
+                                     KeyDown="IrefCmdBox_KeyDown"
+                                     ToolTip="回车或点「下发给定」发送 $R &lt;mA&gt;。"/>
                             <Button Grid.Column="3" Content="下发给定" Style="{StaticResource AccentBtn}" Click="ApplyIref_Click"/>
                         </Grid>
                         <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
@@ -244,7 +248,7 @@
                                     <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
                                     <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
                                     <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
-                                    <RowDefinition/><RowDefinition/><RowDefinition/>
+                                    <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
                                 </Grid.RowDefinitions>
                                 <Label Grid.Row="0" Content="Kp"/>
                                 <TextBox x:Name="KpBox" Grid.Row="0" Grid.Column="1" Margin="0,3" Text="0.3"/>
@@ -284,30 +288,36 @@
                                 <TextBox x:Name="DtBox" Grid.Row="11" Grid.Column="1" Margin="0,3" Text="400"
                                          ToolTip="双极性死区补偿，两个沿合计，默认 400 ns。0 关闭。三电平不用此值。"/>
                                 <Label Grid.Row="12" Content="CM (ns)"/>
-                                <TextBox x:Name="CmBox" Grid.Row="12" Grid.Column="1" Margin="0,3" Text="300"
-                                         ToolTip="三电平两侧最小脉宽，默认 300 ns（200–2000）。指令只加长一边。UART Z 时两边都关。"/>
-                                <Label Grid.Row="13" Content="陷波1 Hz"/>
-                                <TextBox x:Name="Notch0Box" Grid.Row="13" Grid.Column="1" Margin="0,3" Text="0"
+                                <TextBox x:Name="CmBox" Grid.Row="12" Grid.Column="1" Margin="0,3" Text="400"
+                                         ToolTip="三电平两侧最小脉宽，默认 400 ns（200–2000）。指令只加长一边。UART Z 时两边都关。"/>
+                                <Label Grid.Row="13" Content="DCM 退出 (A)"/>
+                                <TextBox x:Name="DcmExitBox" Grid.Row="13" Grid.Column="1" Margin="0,3" Text="0.05"
+                                         ToolTip="|iref| 大于此值才允许退出 DCM（$S dx=，单位 A，默认 0.05）。"/>
+                                <Label Grid.Row="14" Content="DCM |e| (A)"/>
+                                <TextBox x:Name="DcmErrBox" Grid.Row="14" Grid.Column="1" Margin="0,3" Text="0.01"
+                                         ToolTip="退出 DCM 还要求 |iref−ifb| 小于此值（$S de=，默认 0.01 A）。"/>
+                                <Label Grid.Row="15" Content="陷波1 Hz"/>
+                                <TextBox x:Name="Notch0Box" Grid.Row="15" Grid.Column="1" Margin="0,3" Text="0"
                                          ToolTip="电流指令陷波，0 关闭。Q=5。"/>
-                                <Label Grid.Row="14" Content="陷波2 Hz"/>
-                                <TextBox x:Name="Notch1Box" Grid.Row="14" Grid.Column="1" Margin="0,3" Text="0"
+                                <Label Grid.Row="16" Content="陷波2 Hz"/>
+                                <TextBox x:Name="Notch1Box" Grid.Row="16" Grid.Column="1" Margin="0,3" Text="0"
                                          ToolTip="0 关闭"/>
-                                <Label Grid.Row="15" Content="陷波3 Hz"/>
-                                <TextBox x:Name="Notch2Box" Grid.Row="15" Grid.Column="1" Margin="0,3" Text="0"
+                                <Label Grid.Row="17" Content="陷波3 Hz"/>
+                                <TextBox x:Name="Notch2Box" Grid.Row="17" Grid.Column="1" Margin="0,3" Text="0"
                                          ToolTip="0 关闭"/>
-                                <Label Grid.Row="16" Content="陷波4 Hz"/>
-                                <TextBox x:Name="Notch3Box" Grid.Row="16" Grid.Column="1" Margin="0,3" Text="0"
+                                <Label Grid.Row="18" Content="陷波4 Hz"/>
+                                <TextBox x:Name="Notch3Box" Grid.Row="18" Grid.Column="1" Margin="0,3" Text="0"
                                          ToolTip="0 关闭"/>
-                                <Label Grid.Row="17" Content="增益" VerticalAlignment="Center"/>
-                                <WrapPanel Grid.Row="17" Grid.Column="1" Margin="0,3">
+                                <Label Grid.Row="19" Content="增益" VerticalAlignment="Center"/>
+                                <WrapPanel Grid.Row="19" Grid.Column="1" Margin="0,3">
                                     <RadioButton x:Name="GzOff" Content="单段" IsChecked="True" Margin="0,0,12,4"
                                                  GroupName="GainZone"
                                                  ToolTip="gz=0：Kp、Ki 全程不变。"/>
                                     <RadioButton x:Name="GzOn" Content="两段" Margin="0,0,12,4" GroupName="GainZone"
                                                  ToolTip="gz=1：电流指令变慢约 40 ms 后，Kp 和 Ki 同时乘静止比例。运动时约 2 ms 恢复。不看电流大小，也不看电流误差。"/>
                                 </WrapPanel>
-                                <Label Grid.Row="18" Content="静止比例"/>
-                                <TextBox x:Name="GsBox" Grid.Row="18" Grid.Column="1" Margin="0,3" Text="0.35"
+                                <Label Grid.Row="20" Content="静止比例"/>
+                                <TextBox x:Name="GsBox" Grid.Row="20" Grid.Column="1" Margin="0,3" Text="0.35"
                                          ToolTip="静止时 Kp、Ki 同乘这个数。0.35 约把 820 Hz 增益降 9 dB。"/>
                             </Grid>
                             <TextBlock Margin="0,8,0,8" Foreground="{StaticResource MuteBrush}" TextWrapping="Wrap"

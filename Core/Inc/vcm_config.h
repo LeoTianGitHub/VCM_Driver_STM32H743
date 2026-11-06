@@ -35,10 +35,10 @@
 #define VCM_HALF_PI_EN             0U
 #define VCM_HALF_TS_S              (VCM_PWM_TS_S * 0.5f)
 /* Both tri-level pulses stay at least this wide while the current loop
- * is closed, including at zero command. Default 300 ns (above ~200 ns gate).
- * Host $S cm=<ns>; Live / $D / Flash. At 48 V / ~1.2 mH, 300 ns → ~12 mA p-p.
+ * is closed, including at zero command. Default 400 ns (above ~200 ns gate).
+ * Host $S cm=<ns>; Live / $D / Flash. At 48 V / ~1.2 mH, 400 ns → ~16 mA p-p.
  * The command only lengthens one side. UART Z holds both pulses off. */
-#define VCM_TRI_CM_NS              300U
+#define VCM_TRI_CM_NS              400U
 #define VCM_TRI_CM_NS_MIN          200U
 #define VCM_TRI_CM_NS_MAX          2000U
 /* $K: bipolar, t_d forced to 0, PI at ±0.2 A then ±0.6 A. Axis must be still. */
@@ -171,15 +171,45 @@
 #define VCM_IDLE_EXIT_A            0.035f
 #define VCM_IDLE_ENTER_DEB         5000U  /* 100 ms @ 50 kHz */
 
+/*
+ * DCM FF when coast IFB is untrustworthy. Tri-level only.
+ * Hysteresis: ENTER < EXIT so mid-band cannot flap.
+ * Enter when |iref| < ENTER; leave when |iref| > EXIT and |iref−ifb| < ERR,
+ * or when coast |ifb| overshoots |iref|+ERR (hand PI the excess), or
+ * |iref| > FORCE (safety — frozen gain must not run away at amps).
+ * DCM voltage: m = I·R/(2V) + sign(I)·DT_MOD_{P|N} + offset.
+ * DT_MOD lengthens only the commanded side (2·m·T). Bridge/gate asymmetry
+ * needs split P/N: bench 1.4.88 same |m| → +10≈+10 mA but −10≈−25 mA.
+ * Enter offset is still captured (same-sign, capped) for leftover trim —
+ * must NOT scale with I (mod/I made 150 mA→225 mA / 660 mA→1.5 A).
+ * EXIT / EXIT_ERR live in g_vcm (host $S dx= / de=).
+ */
+#define VCM_DCM_EN                 1U
+#define VCM_DCM_ENTER_A            0.03f
+#define VCM_DCM_ENTER_IA           0.05f   /* also need |ifb_avg| below this */
+#define VCM_DCM_EXIT_A             0.05f
+#define VCM_DCM_EXIT_ERR_A         0.01f   /* |iref − coast ifb| before PI hand-off */
+#define VCM_DCM_EXIT_A_MIN         0.050f
+#define VCM_DCM_EXIT_A_MAX         2.000f
+#define VCM_DCM_EXIT_ERR_A_MIN     0.010f
+#define VCM_DCM_EXIT_ERR_A_MAX     0.500f
+#define VCM_DCM_FORCE_A            0.250f  /* leave FF even if |e| still large */
+#define VCM_DCM_DEB                50U   /* 1 ms @ 50 kHz */
+#define VCM_DCM_FF_SCALE           1.75f
+#define VCM_DCM_DT_MOD_P           0.0015f /* +I; ~60 ns */
+#define VCM_DCM_DT_MOD_N           0.0005f /* −I; bridge hotter on − */
+#define VCM_DCM_OFFSET_MAX         0.02f /* |m| add-on for CM/dead-time */
+#define VCM_DCM_IREF_ZERO_A        0.002f /* |iref| below → m=0 in DCM */
+
 /* Kp stays closed at every current. Ki ignores |e_i| below the ADC noise
  * floor so a constant-force hold does not walk modulation on IFB hash.
  * Quiet idle is UART 'Z' only. */
 /* 0 = off. Was 0.10 A while IFB hash walked Ki; hardware RC made it redundant. */
 #define VCM_KI_ERR_DB_A            0.0f
-/* Kp feedback EMA @ 50 kHz. 1.0 = off (pass-through). Hardware RC on
- * TPA8001→ADC already kills the HF hash; keep this at 1 so Kp BW returns.
- * Set ≈0.0247 (~200 Hz) only if the analog filter is missing. */
-#define VCM_KP_FDBK_LPF_A          1.0f
+/* Kp feedback EMA @ 50 kHz. 1.0 = off. fdbk=0 puts Kp on raw coast IFB;
+ * without this, Kp·hash modulates every 20 µs → audible buzz (mod swings).
+ * α≈0.0247 → ~200 Hz; Ki still uses unfiltered ifb_avg. */
+#define VCM_KP_FDBK_LPF_A          0.0247f
 
 /* 0: enable goes straight to RUN (no IFB/IREF offset cal, no 2 ms open loop).
  * 1: measure offsets for VCM_IFB_CAL_SAMPLES with m=0 before closing PI. */
@@ -247,12 +277,13 @@
 
 /* Host frames: "$" ... "\n" @ 115200. Avoid 0x05 / 0xA0 (IAP).
  *   $I  identify     $P  telemetry     $D  dump params
- *   $S kp=300 ki=300000 obs=61 lpf=314 ff=0 vbus=48000 r=3620 l=1188 fdbk=1 dt=400 cm=300 n0=0 n1=0 n2=0 n3=0 gz=0 gs=350
+ *   $S kp=300 ki=300000 obs=61 lpf=314 ff=0 vbus=48000 r=3620 l=1188 fdbk=1 dt=400 cm=300 dx=500 de=100 n0=0 n1=0 n2=0 n3=0 gz=0 gs=350
  *      (kp/obs/lpf/vbus/r ×1000, ki ×1000, ff ×1e6, l = µH,
  *       lpf = command IREF LPF α, 0.314≈3 kHz @ 50 kHz, 1.0 = off,
  *       fdbk 0=Kp and Ki on IFB, 1=Kp on î and Ki on IFB,
  *       dt = two-edge bipolar compensation ns, 0 = off,
  *       cm = tri-level min pulse ns (both sides), 200..2000, default 300,
+ *       dx = DCM exit |iref| threshold mA (default 500), de = |iref−ifb| mA (default 100),
  *       n0..n3 = current-command notch Hz, 0 = off,
  *       gz 0=one PI zone 1=standstill scale, gs = standstill scale ×1000)
  *   $R <mA>  IREF override (PI on)   $Z $A $F $B $T $C $G as lines too
@@ -269,11 +300,11 @@
  *
  * Version in $I / $D: hw=<board> fw=<major>.<minor>.<patch>
  */
-#define VCM_HOST_PROTO          3U
+#define VCM_HOST_PROTO          4U
 #define VCM_HOST_LINE_MAX       192U
 #define VCM_HW_VERSION          1U   /* PCB / hardware revision */
 #define VCM_FW_VERSION_MAJOR    1U
 #define VCM_FW_VERSION_MINOR    4U
-#define VCM_FW_VERSION_PATCH    71U
+#define VCM_FW_VERSION_PATCH    91U
 
 #endif /* VCM_CONFIG_H */

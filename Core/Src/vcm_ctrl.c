@@ -96,6 +96,9 @@ static float vcm_e_hat;      /* Ke·v estimate, volts */
 static float vcm_e_apply;    /* volts actually added into m; 0 inside the gate */
 static float vcm_e_innov_lp;
 static float vcm_kp_fdbk_lp; /* Kp feedback after ~200 Hz EMA */
+static uint16_t vcm_dcm_deb;
+static float vcm_dcm_mod_per_a; /* R/(2V) term */
+static float vcm_dcm_offset;    /* CM/dead-time add-on; captured at enter */
 typedef struct
 {
   float b0, b1, b2, a1, a2;
@@ -170,6 +173,11 @@ static void VCM_LoopStateReset(void)
   vcm_gz_tick = 0U;
   vcm_gz_s = 1.0f;
   g_vcm.gz_hold = 0U;
+  g_vcm.dcm = 0U;
+  vcm_dcm_deb = 0U;
+  vcm_dcm_mod_per_a = VCM_DCM_FF_SCALE * (VCM_COIL_R_OHM + VCM_IFB_RS_OHM) /
+                      (2.0f * VCM_VBUS_V);
+  vcm_dcm_offset = 0.0f;
   {
     uint32_t i;
     for (i = 0U; i < 4U; i++)
@@ -554,6 +562,8 @@ static float VCM_PiStep(float ref, float fdbk_p, float fdbk_i, float ts, uint8_t
         g_vcm.pwm_armed = 0U;
         g_vcm.integral = 0.0f;
         g_vcm.mod_ff = 0.0f;
+        g_vcm.dcm = 0U;
+        vcm_dcm_deb = 0U;
         vcm_idle_deb = 0U;
         vcm_iref_z1 = ref;
         return 0.0f;
@@ -577,6 +587,8 @@ static float VCM_PiStep(float ref, float fdbk_p, float fdbk_i, float ts, uint8_t
     {
       g_vcm.integral = 0.0f;
       g_vcm.mod_ff = 0.0f;
+      g_vcm.dcm = 0U;
+      vcm_dcm_deb = 0U;
       vcm_iref_z1 = ref;
       return 0.0f;
     }
@@ -595,11 +607,191 @@ static float VCM_PiStep(float ref, float fdbk_p, float fdbk_i, float ts, uint8_t
   {
     g_vcm.integral = 0.0f;
     g_vcm.mod_ff = 0.0f;
+    g_vcm.dcm = 0U;
+    vcm_dcm_deb = 0U;
     if (full_rate != 0U)
     {
       vcm_iref_z1 = ref;
     }
     return 0.0f;
+  }
+#endif
+
+#if (VCM_DCM_EN != 0U)
+  /* Tri-level small-I: coast IFB≈0 → FF-only m. Bipolar stays on PI. */
+  if (full_rate != 0U)
+  {
+    if (vcm_run_bip != 0U)
+    {
+      g_vcm.dcm = 0U;
+      vcm_dcm_deb = 0U;
+    }
+    else
+    {
+      float ra = VCM_Absf(ref);
+      float ia = (g_vcm.adc_pair_ok != 0U) ? VCM_Absf(g_vcm.ifb_avg_a) : 0.0f;
+      /* Coast IFB only — î can look "CCM" while the platform is still ~0. */
+      float i_err = (g_vcm.adc_pair_ok != 0U)
+                        ? VCM_Absf(ref - g_vcm.ifb_avg_a)
+                        : 1.0e6f;
+      uint8_t leave;
+
+      if (g_vcm.dcm != 0U)
+      {
+        leave = 0U;
+        if (ra > VCM_DCM_FORCE_A)
+        {
+          leave = 1U;
+        }
+        else if ((ra > g_vcm.dcm_exit_a) && (i_err < g_vcm.dcm_exit_err_a))
+        {
+          leave = 1U;
+        }
+        else if ((ra > g_vcm.dcm_exit_a) &&
+                 (ia > (ra + g_vcm.dcm_exit_err_a)))
+        {
+          /* FF gain too hot: current already above command — give PI the wheel. */
+          leave = 1U;
+        }
+
+        if (leave != 0U)
+        {
+          if (vcm_dcm_deb < 0xFFFFU)
+          {
+            vcm_dcm_deb++;
+          }
+          if (vcm_dcm_deb >= VCM_DCM_DEB)
+          {
+            /* Last applied m already includes DCM FF; keep m continuous.
+             * Align î / Kp LPF to iref so the first PI tick has ~0 Kp error. */
+            g_vcm.integral = g_vcm.mod;
+            g_vcm.ifb_hat_a = ref;
+            vcm_kp_fdbk_lp = ref;
+            g_vcm.dcm = 0U;
+            vcm_dcm_deb = 0U;
+          }
+        }
+        else
+        {
+          vcm_dcm_deb = 0U;
+        }
+      }
+      else if ((ra < VCM_DCM_ENTER_A) &&
+               (g_vcm.adc_pair_ok != 0U) && (ia < VCM_DCM_ENTER_IA))
+      {
+        /* Wait until coast current has fallen — entering while mod is still
+         * huge after a 1 A→10 mA step froze a bogus offset and drove ~−1 A. */
+        if (vcm_dcm_deb < 0xFFFFU)
+        {
+          vcm_dcm_deb++;
+        }
+        if (vcm_dcm_deb >= VCM_DCM_DEB)
+        {
+          float vb = g_vcm.vbus_v;
+          float mpa_r;
+          float off;
+          float m_r;
+
+          if (vb < 1.0f)
+          {
+            vb = 1.0f;
+          }
+          mpa_r = VCM_DCM_FF_SCALE * (g_vcm.coil_r_ohm + VCM_IFB_RS_OHM) /
+                  (2.0f * vb);
+          vcm_dcm_mod_per_a = mpa_r;
+          /* Baseline already includes DT_MOD so enter trim does not stack it. */
+          m_r = (ref * mpa_r) +
+                ((ref >= 0.0f) ? VCM_DCM_DT_MOD_P : -VCM_DCM_DT_MOD_N);
+          /* Trim only in the command direction. A stale opposite-sign offset
+           * (e.g. after a big step) made +Iref apply −m at standstill. */
+          if (ra < VCM_DCM_IREF_ZERO_A)
+          {
+            off = 0.0f;
+          }
+          else if (VCM_Absf(g_vcm.mod) > (VCM_Absf(m_r) + VCM_DCM_OFFSET_MAX))
+          {
+            off = 0.0f;
+          }
+          else if (ref >= 0.0f)
+          {
+            off = g_vcm.mod - m_r;
+            if (off < 0.0f)
+            {
+              off = 0.0f;
+            }
+            if (off > VCM_DCM_OFFSET_MAX)
+            {
+              off = VCM_DCM_OFFSET_MAX;
+            }
+          }
+          else
+          {
+            off = g_vcm.mod - m_r;
+            if (off > 0.0f)
+            {
+              off = 0.0f;
+            }
+            if (off < -VCM_DCM_OFFSET_MAX)
+            {
+              off = -VCM_DCM_OFFSET_MAX;
+            }
+          }
+          vcm_dcm_offset = off;
+          g_vcm.dcm = 1U;
+          g_vcm.integral = 0.0f;
+          vcm_dcm_deb = 0U;
+        }
+      }
+      else
+      {
+        vcm_dcm_deb = 0U;
+      }
+    }
+  }
+
+  if ((g_vcm.dcm != 0U) && (vcm_run_bip == 0U))
+  {
+    float m_ff;
+    float m_max;
+    float ra = VCM_Absf(ref);
+
+    g_vcm.integral = 0.0f;
+    if (ra < VCM_DCM_IREF_ZERO_A)
+    {
+      /* Zero command: no net volt-second; keep symmetric CM only. */
+      vcm_dcm_offset = 0.0f;
+      m_ff = 0.0f;
+    }
+    else
+    {
+      float m_dt = (ref >= 0.0f) ? VCM_DCM_DT_MOD_P : -VCM_DCM_DT_MOD_N;
+
+      /* Drop a fighting enter-offset if the command flipped sign. */
+      if (((ref > 0.0f) && (vcm_dcm_offset < 0.0f)) ||
+          ((ref < 0.0f) && (vcm_dcm_offset > 0.0f)))
+      {
+        vcm_dcm_offset = 0.0f;
+      }
+      /* R-FF + fixed deadzone |m| + enter trim. DT_MOD lengthens only the
+       * commanded side so 2·m·T clears the gate edge; CM stays symmetric. */
+      m_ff = (ref * vcm_dcm_mod_per_a) + m_dt + vcm_dcm_offset;
+    }
+    g_vcm.mod_ff = m_ff;
+    m_max = VCM_ModMax();
+    if (m_ff > m_max)
+    {
+      m_ff = m_max;
+    }
+    else if (m_ff < -m_max)
+    {
+      m_ff = -m_max;
+    }
+    if (full_rate != 0U)
+    {
+      vcm_iref_z1 = ref;
+    }
+    (void)ts;
+    return m_ff;
   }
 #endif
 
@@ -2140,6 +2332,8 @@ void VCM_Init(void)
   g_vcm.pi_fdbk = VCM_PI_FDBK_DEFAULT;
   g_vcm.drv_dt_ns = VCM_DRV_DT_NS;
   g_vcm.tri_cm_ns = VCM_TRI_CM_NS;
+  g_vcm.dcm_exit_a = VCM_DCM_EXIT_A;
+  g_vcm.dcm_exit_err_a = VCM_DCM_EXIT_ERR_A;
   g_vcm.notch_hz[0] = 0U;
   g_vcm.notch_hz[1] = 0U;
   g_vcm.notch_hz[2] = 0U;
@@ -2147,6 +2341,8 @@ void VCM_Init(void)
   g_vcm.gz_en = VCM_GZ_EN_DEFAULT;
   g_vcm.gz_scale = VCM_GZ_SCALE_DEFAULT;
   g_vcm.gz_hold = 0U;
+  g_vcm.dcm = 0U;
+  vcm_dcm_deb = 0U;
   (void)VCM_NvLoad();
   VCM_NotchSync();
   g_vcm.state = VCM_STATE_IDLE;
@@ -2187,10 +2383,11 @@ void VCM_Init(void)
 
 /* Capture TX holds the main loop for a whole line. The 1-byte RX register
  * overruns in that time, so "$U stop" never arrived and capture kept going. */
-#define VCM_UART_RXQ 128U
+#define VCM_UART_RXQ 512U
 static uint8_t vcm_uart_rxq[VCM_UART_RXQ];
 static uint16_t vcm_uart_rx_w;
 static uint16_t vcm_uart_rx_r;
+static uint32_t vcm_uart_rx_drop; /* RX queue full; silent loss before 1.4.90 */
 /* Bytes seen before the host parser is ready (UID blink). 0x07 is answered
  * immediately; everything else is replayed on the normal path. */
 static uint8_t vcm_uart_hold[16];
@@ -2209,10 +2406,18 @@ static void VCM_UartRxPull(void)
       vcm_uart_rxq[vcm_uart_rx_w] = b;
       vcm_uart_rx_w = next;
     }
+    else if (vcm_uart_rx_drop < 0xFFFFFFFFu)
+    {
+      vcm_uart_rx_drop++;
+    }
   }
   if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_ORE) != 0U)
   {
     __HAL_UART_CLEAR_FLAG(&huart1, UART_CLEAR_OREF);
+    if (vcm_uart_rx_drop < 0xFFFFFFFFu)
+    {
+      vcm_uart_rx_drop++;
+    }
   }
 }
 
@@ -2411,6 +2616,9 @@ static void VCM_HostTelem(void)
 {
   VCM_UartWrite("TL iref_ma=");
   VCM_UartWriteMilli(g_vcm.iref_a);
+  VCM_UartWrite(" ovr_ma=");
+  VCM_UartWriteMilli(g_vcm.iref_override_en != 0U ? g_vcm.iref_override_a
+                                                    : 0.0f);
   VCM_UartWrite(" ihat_ma=");
   VCM_UartWriteMilli(g_vcm.ifb_hat_a);
   VCM_UartWrite(" iavg_ma=");
@@ -2439,6 +2647,8 @@ static void VCM_HostTelem(void)
   VCM_UartWriteI32((int32_t)g_vcm.gz_en);
   VCM_UartWrite(" gzh=");
   VCM_UartWriteI32((int32_t)g_vcm.gz_hold);
+  VCM_UartWrite(" dcm=");
+  VCM_UartWriteI32((int32_t)g_vcm.dcm);
   VCM_UartWrite(" ov=");
   VCM_UartWriteI32((int32_t)g_vcm.iref_override_en);
   VCM_UartWrite(" hold=");
@@ -2465,6 +2675,8 @@ static void VCM_HostTelem(void)
   VCM_UartWriteI32((int32_t)g_vcm.adc1_ovr_cnt);
   VCM_UartWrite(" ovr2=");
   VCM_UartWriteI32((int32_t)g_vcm.adc2_ovr_cnt);
+  VCM_UartWrite(" rxdrop=");
+  VCM_UartWriteI32((int32_t)vcm_uart_rx_drop);
   VCM_UartWrite(" ticks=");
   VCM_UartWriteI32((int32_t)g_vcm.isr_ticks);
   VCM_UartWrite("\r\n");
@@ -2530,6 +2742,10 @@ static void VCM_HostDump(void)
   VCM_UartWriteI32((int32_t)g_vcm.drv_dt_ns);
   VCM_UartWrite(" cm_ns=");
   VCM_UartWriteI32((int32_t)g_vcm.tri_cm_ns);
+  VCM_UartWrite(" dx_e3=");
+  VCM_UartWriteMilli(g_vcm.dcm_exit_a);
+  VCM_UartWrite(" de_e3=");
+  VCM_UartWriteMilli(g_vcm.dcm_exit_err_a);
   VCM_UartWrite(" n0=");
   VCM_UartWriteI32((int32_t)g_vcm.notch_hz[0]);
   VCM_UartWrite(" n1=");
@@ -2670,6 +2886,19 @@ static void VCM_HostSet(const char *p, const char *end)
       g_vcm.tri_cm_ns = (uint16_t)v;
       nset++;
     }
+    else if ((klen == 2U) && (key[0] == 'd') && (key[1] == 'x'))
+    {
+      g_vcm.dcm_exit_a = VCM_Clampf((float)v * 0.001f,
+                                    VCM_DCM_EXIT_A_MIN, VCM_DCM_EXIT_A_MAX);
+      nset++;
+    }
+    else if ((klen == 2U) && (key[0] == 'd') && (key[1] == 'e'))
+    {
+      g_vcm.dcm_exit_err_a = VCM_Clampf((float)v * 0.001f,
+                                        VCM_DCM_EXIT_ERR_A_MIN,
+                                        VCM_DCM_EXIT_ERR_A_MAX);
+      nset++;
+    }
     else if ((klen == 2U) && (key[0] == 'n') &&
              (key[1] >= '0') && (key[1] <= '3'))
     {
@@ -2794,9 +3023,35 @@ static void VCM_HostLine(char *line, uint16_t n)
   }
   if (cmd == 'R')
   {
-    int32_t ma = VCM_ParseI32(&p, end);
+    int32_t ma = 0;
+    const char *q = p;
+    uint8_t got = 0U;
+
+    /* Prefer "$R ma=<n>" so a glued digit cannot turn "5" into "55". */
+    while ((q + 3) < end)
+    {
+      if ((q[0] == 'm') && (q[1] == 'a') && (q[2] == '='))
+      {
+        q += 3;
+        ma = VCM_ParseI32(&q, end);
+        got = 1U;
+        break;
+      }
+      q++;
+    }
+    if (got == 0U)
+    {
+      ma = VCM_ParseI32(&p, end);
+    }
     VCM_HostIrefMa(ma);
-    VCM_UartWrite("OK\r\n");
+    /* Echo parsed mA so host can confirm RX (unit is milliamps, not amps). */
+    VCM_UartWrite("OK iref_ma=");
+    VCM_UartWriteI32(ma);
+    VCM_UartWrite(" ovr_ma=");
+    VCM_UartWriteMilli(g_vcm.iref_override_a);
+    VCM_UartWrite(" ov=");
+    VCM_UartWriteI32((int32_t)g_vcm.iref_override_en);
+    VCM_UartWrite("\r\n");
     return;
   }
   if (cmd == 'C')
@@ -3348,6 +3603,8 @@ uint8_t VCM_ServiceUartCmd(uint8_t cmd)
     VCM_UartWriteI32((int32_t)g_vcm.pwm_armed);
     VCM_UartWrite(" mode=");
     VCM_UartWriteI32((int32_t)g_vcm.pwm_mode);
+    VCM_UartWrite(" dcm=");
+    VCM_UartWriteI32((int32_t)g_vcm.dcm);
     VCM_UartWrite("\r\n");
     return 1U;
   }

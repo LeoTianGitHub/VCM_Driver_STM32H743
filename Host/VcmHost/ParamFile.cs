@@ -44,7 +44,13 @@ internal sealed class LoopParams
     public int DtNs { get; set; } = 400;
 
     [JsonPropertyName("cm_ns")]
-    public int CmNs { get; set; } = 300;
+    public int CmNs { get; set; } = 400;
+
+    [JsonPropertyName("dcm_exit_a")]
+    public double DcmExitA { get; set; } = 0.05;
+
+    [JsonPropertyName("dcm_exit_err_a")]
+    public double DcmExitErrA { get; set; } = 0.01;
 
     [JsonPropertyName("n0")]
     public int N0 { get; set; }

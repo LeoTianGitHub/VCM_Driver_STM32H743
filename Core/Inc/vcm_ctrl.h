@@ -72,8 +72,11 @@ typedef struct
   uint16_t tri_cm_ns;         /* tri-level min pulse both sides, ns */
   uint16_t notch_hz[4];       /* current-command notches, Hz; 0 = off */
   float gz_scale;             /* standstill Kp/Ki scale, 0.05..1 */
+  float dcm_exit_a;           /* leave DCM when |iref| > this; $S dx= */
+  float dcm_exit_err_a;       /* and |iref−ifb| < this; $S de= */
   uint8_t gz_en;              /* 0 = one zone, 1 = lower gain when command is quiet */
   uint8_t gz_hold;            /* 1 = standstill scale is applied this period */
+  uint8_t dcm;                /* 1 = small-I FF mode (tri-level); Live / $D */
   uint32_t isr_ticks;
   uint32_t start_count;
   uint32_t stop_count;

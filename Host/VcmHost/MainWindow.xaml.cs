@@ -4,6 +4,8 @@ using System.IO;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using System.Windows.Threading;
@@ -63,6 +65,8 @@ public partial class MainWindow : Window
     private readonly List<string> _csv = new();
     private readonly object _logGate = new();
     private bool _syncingIref;
+    private bool _irefDragging;
+    private int _lastIrefMaSent = int.MinValue;
     private bool _syncingObs;
     private bool _syncingLpf;
     private bool _syncingMode;
@@ -86,6 +90,11 @@ public partial class MainWindow : Window
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
     {
+        /* Slider only refreshed the text box; send on drag-end so UI matches motor. */
+        IrefSlider.AddHandler(Thumb.DragStartedEvent,
+            new DragStartedEventHandler((_, _) => _irefDragging = true), true);
+        IrefSlider.AddHandler(Thumb.DragCompletedEvent,
+            new DragCompletedEventHandler(IrefSlider_DragCompleted), true);
         RefreshPorts_Click(sender, e);
     }
 
@@ -365,6 +374,19 @@ public partial class MainWindow : Window
         }
 
         AppendLog(line);
+        if (line.StartsWith("OK iref_ma=", StringComparison.Ordinal))
+        {
+            var ack = Protocol.ParseFields(line);
+            var got = Protocol.Int(ack, "iref_ma", int.MinValue);
+            if (_lastIrefMaSent != int.MinValue && got != _lastIrefMaSent)
+            {
+                AppendLog($"WARN RX iref_ma={got} != TX {_lastIrefMaSent} mA");
+            }
+            else if (got != int.MinValue)
+            {
+                AppendLog($"RX OK 固件覆盖={got} mA ({got / 1000.0:0.###} A)");
+            }
+        }
         if (_pendingBaud != 0 && line.StartsWith("ERR", StringComparison.Ordinal))
         {
             var failed = _pendingBaud;
@@ -550,6 +572,16 @@ public partial class MainWindow : Window
                 .ToString(CultureInfo.InvariantCulture);
         }
 
+        if (m.ContainsKey("dx_e3"))
+        {
+            DcmExitBox.Text = Protocol.Milli(m, "dx_e3").ToString("0.###", CultureInfo.InvariantCulture);
+        }
+
+        if (m.ContainsKey("de_e3"))
+        {
+            DcmErrBox.Text = Protocol.Milli(m, "de_e3").ToString("0.###", CultureInfo.InvariantCulture);
+        }
+
         if (m.ContainsKey("n0"))
         {
             Notch0Box.Text = Protocol.Int(m, "n0").ToString(CultureInfo.InvariantCulture);
@@ -599,7 +631,12 @@ public partial class MainWindow : Window
         StateText.Foreground = state == 4
             ? (Brush)FindResource("DangerBrush")
             : (Brush)FindResource("HatBrush");
+        var ovr = Protocol.Milli(m, "ovr_ma");
         IrefText.Text = FmtA(iref);
+        if (!double.IsNaN(ovr) && Math.Abs(ovr - iref) > 0.002)
+        {
+            IrefText.Text += $" (ovr {FmtA(ovr)})";
+        }
         HatText.Text = FmtA(hat);
         AvgText.Text = FmtA(avg);
         ErrText.Text = FmtA(err);
@@ -1366,24 +1403,91 @@ public partial class MainWindow : Window
         IrefCmdBox.Text = e.NewValue.ToString("0.000", CultureInfo.InvariantCulture);
     }
 
-    private void ApplyIref_Click(object sender, RoutedEventArgs e)
+    private void IrefSlider_DragCompleted(object sender, DragCompletedEventArgs e)
     {
-        if (!TryParseBox(IrefCmdBox.Text, out var a))
+        var dragging = _irefDragging;
+        _irefDragging = false;
+        if (!dragging || _syncingIref || !_link.IsOpen)
         {
             return;
         }
 
-        a = Math.Clamp(a, -Protocol.IMaxA, Protocol.IMaxA);
-        _syncingIref = true;
-        IrefSlider.Value = a;
-        IrefCmdBox.Text = a.ToString("0.000", CultureInfo.InvariantCulture);
-        _syncingIref = false;
-        _link.Send(Protocol.IrefLine(a));
+        SendIrefOverride(IrefSlider.Value);
     }
 
-    private void Analog_Click(object sender, RoutedEventArgs e) => _link.Send("$A\n");
-    private void Force_Click(object sender, RoutedEventArgs e) => _link.Send("$F\n");
-    private void Zero_Click(object sender, RoutedEventArgs e) => _link.Send("$Z\n");
+    private void ApplyIref_Click(object sender, RoutedEventArgs e) => SendIrefFromBox();
+
+    private void IrefCmdBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            SendIrefFromBox();
+            e.Handled = true;
+        }
+    }
+
+    private void SendIrefFromBox()
+    {
+        if (!TryParseBox(IrefCmdBox.Text, out var a))
+        {
+            AppendLog("IREF 无法解析: " + IrefCmdBox.Text);
+            return;
+        }
+
+        SendIrefOverride(a);
+    }
+
+    private void SendIrefOverride(double amps)
+    {
+        if (!_link.IsOpen)
+        {
+            AppendLog("未连接，未下发 IREF");
+            return;
+        }
+
+        amps = Math.Clamp(amps, -Protocol.IMaxA, Protocol.IMaxA);
+        _syncingIref = true;
+        IrefSlider.Value = amps;
+        IrefCmdBox.Text = amps.ToString("0.000", CultureInfo.InvariantCulture);
+        _syncingIref = false;
+        var ma = (int)Math.Round(amps * 1000.0);
+        _lastIrefMaSent = ma;
+        var line = Protocol.IrefLine(amps);
+        /* Drop queued $P so $R cannot be delayed behind a long TL reply. */
+        _link.SendExclusive(line);
+        /* Protocol unit is mA: "$R ma=5" means 0.005 A, not 5 A. */
+        AppendLog($"TX {line.TrimEnd()}  ({amps.ToString("0.###", CultureInfo.InvariantCulture)} A)");
+    }
+
+    private void SetIrefUi(double amps)
+    {
+        amps = Math.Clamp(amps, -Protocol.IMaxA, Protocol.IMaxA);
+        _syncingIref = true;
+        IrefSlider.Value = amps;
+        IrefCmdBox.Text = amps.ToString("0.000", CultureInfo.InvariantCulture);
+        _syncingIref = false;
+    }
+
+    private void Analog_Click(object sender, RoutedEventArgs e)
+    {
+        _link.Send("$A\n");
+        AppendLog("TX $A  (模拟 IREF：发送框不再表示固件覆盖值，看左上 IREF)");
+    }
+
+    private void Force_Click(object sender, RoutedEventArgs e)
+    {
+        SetIrefUi(0.5);
+        _link.Send("$F\n");
+        AppendLog("TX $F  (Force 0.5 A)");
+    }
+
+    private void Zero_Click(object sender, RoutedEventArgs e)
+    {
+        SetIrefUi(0.0);
+        _link.Send("$Z\n");
+        AppendLog("TX $Z  (强制零位 hold)");
+    }
+
     private void ClearFault_Click(object sender, RoutedEventArgs e) => _link.Send("$C\n");
 
     private void ShowPwmMode(bool tri)
@@ -1556,6 +1660,8 @@ public partial class MainWindow : Window
             !TryParseBox(LcoilBox.Text, out var lMh) ||
             !TryParseBox(DtBox.Text, out var dtNs) ||
             !TryParseBox(CmBox.Text, out var cmNs) ||
+            !TryParseBox(DcmExitBox.Text, out var dcmExitA) ||
+            !TryParseBox(DcmErrBox.Text, out var dcmExitErrA) ||
             !TryParseBox(Notch0Box.Text, out var n0) ||
             !TryParseBox(Notch1Box.Text, out var n1) ||
             !TryParseBox(Notch2Box.Text, out var n2) ||
@@ -1576,6 +1682,8 @@ public partial class MainWindow : Window
         p.Fdbk = FdbkObs.IsChecked == true ? 1 : 0;
         p.DtNs = (int)Math.Clamp(Math.Round(dtNs), 0, 1000);
         p.CmNs = (int)Math.Clamp(Math.Round(cmNs), Protocol.TriCmNsMin, Protocol.TriCmNsMax);
+        p.DcmExitA = Math.Clamp(dcmExitA, 0.05, 2.0);
+        p.DcmExitErrA = Math.Clamp(dcmExitErrA, 0.01, 0.5);
         p.N0 = ClampNotch(n0);
         p.N1 = ClampNotch(n1);
         p.N2 = ClampNotch(n2);
@@ -1603,8 +1711,10 @@ public partial class MainWindow : Window
         RcoilBox.Text = ParamFile.Fmt(p.R, "0.###");
         LcoilBox.Text = ParamFile.Fmt(p.LMh, "0.###");
         DtBox.Text = Math.Clamp(p.DtNs, 0, 1000).ToString(CultureInfo.InvariantCulture);
-        CmBox.Text = Math.Clamp(p.CmNs <= 0 ? 300 : p.CmNs, Protocol.TriCmNsMin, Protocol.TriCmNsMax)
+        CmBox.Text = Math.Clamp(p.CmNs <= 0 ? 400 : p.CmNs, Protocol.TriCmNsMin, Protocol.TriCmNsMax)
             .ToString(CultureInfo.InvariantCulture);
+        DcmExitBox.Text = ParamFile.Fmt(Math.Clamp(p.DcmExitA <= 0 ? 0.05 : p.DcmExitA, 0.05, 2.0), "0.###");
+        DcmErrBox.Text = ParamFile.Fmt(Math.Clamp(p.DcmExitErrA <= 0 ? 0.01 : p.DcmExitErrA, 0.01, 0.5), "0.###");
         Notch0Box.Text = ClampNotch(p.N0).ToString(CultureInfo.InvariantCulture);
         Notch1Box.Text = ClampNotch(p.N1).ToString(CultureInfo.InvariantCulture);
         Notch2Box.Text = ClampNotch(p.N2).ToString(CultureInfo.InvariantCulture);
@@ -1629,7 +1739,8 @@ public partial class MainWindow : Window
     private void SendParams(LoopParams p)
     {
         var vbus = Math.Clamp(p.Vbus, Protocol.VbusMin, Protocol.VbusMax);
-        _link.Send(Protocol.SetLine(p.Kp, p.Ki, p.Obs, p.Lpf, p.Ff, vbus, p.R, p.LMh * 0.001, p.Fdbk, p.DtNs, p.CmNs, p.N0, p.N1, p.N2, p.N3, p.Gz, p.Gs));
+        _link.Send(Protocol.SetLine(p.Kp, p.Ki, p.Obs, p.Lpf, p.Ff, vbus, p.R, p.LMh * 0.001, p.Fdbk, p.DtNs, p.CmNs,
+            p.DcmExitA, p.DcmExitErrA, p.N0, p.N1, p.N2, p.N3, p.Gz, p.Gs));
         AppendLog("写入参数");
     }
 
