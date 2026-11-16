@@ -1,9 +1,10 @@
 /**
  * @file    vcm_config.h
- * @brief   VCM current loop - PI + R/L FF, three-level PWM @ 50 kHz
+ * @brief   VCM current loop - PI + R/L FF, three-level PWM @ 20 kHz
  *
- * Structure resonance fn≈820 Hz. Competitor-style short
- * +/-Vbus pulses, rest of period Vcoil=0. PWM stays enabled (no idle clamp).
+ * Structure resonance fn≈820 Hz. Wide bilateral cm so ADC S&H sits inside
+ * each +/-Vbus pulse (period-average IFB). Symmetric ripple is above the
+ * mechanics. PWM stays enabled (no idle clamp).
  */
 #ifndef VCM_CONFIG_H
 #define VCM_CONFIG_H
@@ -13,9 +14,9 @@
 #define VCM_SYSCLK_HZ           480000000UL
 #define VCM_HRTIM_CLOCK_HZ      480000000UL
 
-#define VCM_PWM_FREQ_HZ         50000UL
-#define VCM_CTRL_FREQ_HZ        50000UL
-#define VCM_PWM_PERIOD          ((uint16_t)(VCM_HRTIM_CLOCK_HZ / VCM_PWM_FREQ_HZ)) /* 9600 */
+#define VCM_PWM_FREQ_HZ         20000UL
+#define VCM_CTRL_FREQ_HZ        20000UL
+#define VCM_PWM_PERIOD          ((uint16_t)(VCM_HRTIM_CLOCK_HZ / VCM_PWM_FREQ_HZ)) /* 24000 */
 #define VCM_PWM_REPETITION      ((uint16_t)(VCM_PWM_FREQ_HZ / VCM_CTRL_FREQ_HZ - 1U))
 #define VCM_PWM_TS_S            (1.0f / (float)VCM_CTRL_FREQ_HZ)
 
@@ -36,23 +37,23 @@
 #define VCM_DRV_DT_NS              400U
 #define VCM_DRV_DT_NS_MAX          1000U
 #define VCM_DRV_DT_BAND_A          0.040f  /* linear sign transition, ±A */
-/* 1: after I+ coast sample, re-run PI and reshape this period's −pulse.
- * 0: only the 50 kHz REP PI; −pulse stays as preloaded at period start. */
+/* 1: after I+ pulse sample, re-run PI and reshape this period's −pulse.
+ * 0: only the 20 kHz REP PI; −pulse stays as preloaded at period start. */
 #define VCM_HALF_PI_EN             0U
 #define VCM_HALF_TS_S              (VCM_PWM_TS_S * 0.5f)
 /* Both tri-level pulses stay at least this wide while the current loop
- * is closed, including at zero command. Default 400 ns (above ~200 ns gate).
- * Host $S cm=<ns>; Live / $D / Flash. At 48 V / ~1.2 mH, 400 ns → ~16 mA p-p.
- * The command only lengthens one side. UART Z holds both pulses off. */
-#define VCM_TRI_CM_NS              400U
-#define VCM_TRI_CM_NS_MIN          200U
-#define VCM_TRI_CM_NS_MAX          2000U
+ * is closed, including at zero command. Must fit one S&H window (≈3.7 µs
+ * with 1.5 µs edge guards). Default 4 µs → ~160 mA p-p @ 48 V / 1.2 mH;
+ * symmetric, above the mechanics. Host $S cm=<ns>. UART Z holds both off. */
+#define VCM_TRI_CM_NS              4000U
+#define VCM_TRI_CM_NS_MIN          4000U
+#define VCM_TRI_CM_NS_MAX          20000U
 /* $K: bipolar, t_d forced to 0, PI at ±0.2 A then ±0.6 A. Axis must be still. */
 #define VCM_DT_CAL_I1_A            0.20f
 #define VCM_DT_CAL_I2_A            0.60f
-#define VCM_DT_CAL_SETTLE          1000U   /* 20 ms @ 50 kHz */
-#define VCM_DT_CAL_AVG             2500U   /* valid IFB samples, 50 ms */
-#define VCM_DT_CAL_AVG_MAX         5000U   /* abort if samples do not arrive */
+#define VCM_DT_CAL_SETTLE          400U    /* 20 ms @ 20 kHz */
+#define VCM_DT_CAL_AVG             1000U   /* valid IFB samples, 50 ms */
+#define VCM_DT_CAL_AVG_MAX         2000U   /* abort if samples do not arrive */
 
 #define VCM_MOD_MAX             0.48f
 
@@ -66,8 +67,8 @@
  * Closed loop keeps both pulses at least g_vcm.tri_cm_ns. The current
  * command lengthens one side, so the average voltage is 2*m*Vbus.
  * There is no extra dead-time term on this waveform.
- * Feedback for the 50 kHz step is the mean of the two coast samples.
- * Half-PI (VCM_HALF_PI_EN) is off: −pulse is not reshaped mid-period.
+ * Feedback for the 20 kHz step is the mean of the two mid-pulse samples
+ * (period-average proxy). Half-PI off: −pulse not reshaped mid-period.
  */
 
 #define VCM_I_MAX_A             10.0f
@@ -95,16 +96,14 @@
 #define VCM_IREF_COUNTS_PER_A   (VCM_IREF_V_PER_A * VCM_ADC_COUNTS_PER_V)
 #define VCM_IREF_POLARITY       (-1.0f)
 
-/* Single-zone PI @ 50 kHz: fc≈3.9 kHz (zero ~32 Hz).
- * Default fdbk=1: Kp and Ki on î (period-avg voltage model). Coast IFB is
- * innovation only. Host $S fdbk=0 puts both terms on the 2-point IFB average. */
+/* Single-zone PI @ 20 kHz. Retune kp/ki on the bench after the rate change.
+ * Default fdbk=1: Kp and Ki on î. fdbk=0 uses 2-point mid-pulse IFB average. */
 #define VCM_KP                  0.30f
 #define VCM_KI                  300.0f
 /* Must sit at or above VCM_ModMax(): at steady state err→0, so m ≈ integral
  * and an integral clamped below the modulator ceiling makes every command
  * above that point unreachable no matter how large Kp is. Tri-level ModMax
- * is 0.5 − cm_duty − coast = 0.3456 at the defaults, so 0.30 capped the
- * output near 8 A while the ADC scale allows 10 A. */
+ * is 0.5 − cm_duty − coast at the defaults; keep lim above ModMax. */
 #define VCM_I_INTEGRAL_LIM      0.40f
 /* Back-calc anti-windup gain on the PI(+R-FF) path only. 1 = full unwind;
  * <1 softens recovery. L-FF one-sample spikes are excluded from AW (see PiStep). */
@@ -116,11 +115,11 @@
  * shifted by (s0-s1)*Kp*e so modulation does not step. */
 #define VCM_GZ_EN_DEFAULT          0U
 #define VCM_GZ_SCALE_DEFAULT       0.35f
-#define VCM_GZ_REF_A               0.0004f   /* command LPF, τ≈50 ms @ 50 kHz */
+#define VCM_GZ_REF_A               0.001f    /* command LPF, τ≈50 ms @ 20 kHz */
 #define VCM_GZ_ENTER_A_S           8.0f      /* slow-command slope, A/s */
 #define VCM_GZ_EXIT_A_S            40.0f
-#define VCM_GZ_ENTER_TICKS         2000U     /* 40 ms @ 50 kHz */
-#define VCM_GZ_EXIT_TICKS          100U      /* 2 ms @ 50 kHz */
+#define VCM_GZ_ENTER_TICKS         800U      /* 40 ms @ 20 kHz */
+#define VCM_GZ_EXIT_TICKS          40U       /* 2 ms @ 20 kHz */
 
 /* PI feedback: 0 = Kp and Ki on ifb_avg. 1 = Kp and Ki on ifb_hat (î). */
 #define VCM_PI_FDBK_AVG         0U
@@ -141,40 +140,30 @@
 #define VCM_FF_MOD_PER_A        0.0f
 #define VCM_L_FF_SCALE          0.0f
 #define VCM_L_FF_MOD_PER_A      (VCM_L_FF_SCALE * VCM_COIL_L_H / (2.0f * VCM_VBUS_V))
-/* Command (analog IREF + Live/UART) 1st-order LPF @ 50 kHz.
- * Default fo≈3 kHz. α = host milli step 0.314. 1-exp(-2*pi*3000/50000)=0.31404.
- * Host $S lpf= ; α=1.0 bypasses. */
+/* Command (analog IREF + Live/UART) 1st-order LPF @ 20 kHz.
+ * Default fo≈3 kHz. 1-exp(-2*pi*3000/20000)≈0.607. Host $S lpf= ; 1.0=off. */
 #define VCM_IREF_LPF_HZ         3000.0f
-#define VCM_IREF_OVR_LPF_A      0.314f
+#define VCM_IREF_OVR_LPF_A      0.607f
 #define VCM_L_FF_DIDT_MAX       4000.0f
 
 /*
  * Current observer on the period-average IFB.
  *   î ← î + (Ts/L)(2·m·Vbus − R·î) + α(ifb_avg − î)
- * Default fo≈500 Hz. α is the host milli step 0.061 (displays ~500 Hz).
- * HF still comes from the voltage model. 1-exp(-2*pi*500/50000) = 0.06090.
+ * Default fo≈500 Hz. 1-exp(-2*pi*500/20000)≈0.1456.
  */
 #define VCM_I_OBS_HZ            500.0f
-#define VCM_I_OBS_A             0.0609f  /* host obs=61 @ 50 kHz; DCM keeps this */
-/* CCM: keep α near DCM so î follows 2mVbus/R (period avg), not low coast IFB.
- * Old 0.85 forced î≈iavg → PI/Ki on IFB made clamp ≈ cmd+25 mA. */
+#define VCM_I_OBS_A             0.1456f  /* host obs=146 @ 20 kHz; DCM keeps this */
+/* CCM floor: mild IFB innovation; mid-pulse IFB is period-avg proxy. */
 #define VCM_I_OBS_A_CCM         0.15f
 #define VCM_I_OBS_R_OHM         (VCM_COIL_R_OHM + VCM_IFB_RS_OHM)
 #define VCM_I_OBS_TS_OVER_L     (VCM_PWM_TS_S / VCM_COIL_L_H)
 
-/* ê estimates Ke·v and is added as ê/(2·Vbus) while |Iref| ≥ I_MIN.
- * Below that gate it is not applied and bleeds off, so idle noise cannot
- * wind a voltage into the coil. Bandwidth ~250 Hz: fast enough to drop
- * when the axis stops, slow enough not to chase the current-sample hash.
- * Innovation LPF 500 Hz: 1-exp(-2*pi*500/50000) = 0.06090.
- * Idle bleed ~40 Hz: 1-exp(-2*pi*40/50000) = 0.005013. */
-/* Off: ê chased IFB hash into audible squeal. Re-enable only after
- * pair sampling and idle Ki are quiet on the real axis. */
+/* ê estimates Ke·v (still off on this branch). Scale α for 20 kHz. */
 #define VCM_E_OBS_EN            0U
-#define VCM_E_OBS_HZ            250.0f
-#define VCM_E_OBS_IN_A          0.06090f
+#define VCM_E_OBS_HZ            120.0f
+#define VCM_E_OBS_IN_A          0.1456f
 #define VCM_E_OBS_I_MIN         0.050f
-#define VCM_E_OBS_BLEED_A       0.005013f
+#define VCM_E_OBS_BLEED_A       0.0125f
 
 /*
  * 0: keep PWM at standstill (competitor-style; no software dead zone).
@@ -183,7 +172,7 @@
 #define VCM_IDLE_CLAMP_EN          0U
 #define VCM_IDLE_ENTER_A           0.020f
 #define VCM_IDLE_EXIT_A            0.035f
-#define VCM_IDLE_ENTER_DEB         5000U  /* 100 ms @ 50 kHz */
+#define VCM_IDLE_ENTER_DEB         2000U  /* 100 ms @ 20 kHz */
 
 /*
  * DCM FF when coast IFB is untrustworthy. Tri-level only.
@@ -210,7 +199,7 @@
 #define VCM_DCM_EXIT_ERR_A_MIN     0.010f
 #define VCM_DCM_EXIT_ERR_A_MAX     0.500f
 #define VCM_DCM_FORCE_A            0.250f
-#define VCM_DCM_DEB                50U    /* 1 ms @ 50 kHz */
+#define VCM_DCM_DEB                20U    /* 1 ms @ 20 kHz */
 #define VCM_DCM_FF_SCALE           1.80f
 #define VCM_DCM_DT_MOD_P           0.00008f
 #define VCM_DCM_DT_MOD_N           0.00003f
@@ -239,40 +228,38 @@
  * blind time at enable, and the estimate refreshes on every disable, so
  * temperature drift is removed without any closed-loop tracking.
  */
-#define VCM_IFB_OFF_WAIT           250U     /* 5 ms @ 50 kHz after the bridge opens */
-#define VCM_IFB_OFF_SAMPLES        500U     /* 10 ms of accumulated off-time */
+#define VCM_IFB_OFF_WAIT           100U     /* 5 ms @ 20 kHz after the bridge opens */
+#define VCM_IFB_OFF_SAMPLES        200U     /* 10 ms of accumulated off-time */
 #define VCM_IFB_OFFSET_MAX_A       0.150f   /* reject a bogus capture; real |b| ≤ ~30 mA */
 
 /* $O: one-shot IREF zero capture. The host guarantees the analog IREF
  * input is 0 V for the whole window; nothing is inferred from the reading. */
-#define VCM_IREF_ZERO_SAMPLES      500U     /* 10 ms @ 50 kHz */
+#define VCM_IREF_ZERO_SAMPLES      200U     /* 10 ms @ 20 kHz */
 #define VCM_IREF_ZERO_TIMEOUT_MS   500U
 
 /* A stuck DMA pair leaves the loop on the voltage model only, with stale
- * current for OCP. 500 ticks = 10 ms without a fresh pair is a fault. */
-#define VCM_PAIR_MISS_FAULT        500U
+ * current for OCP. 200 ticks = 10 ms without a fresh pair is a fault. */
+#define VCM_PAIR_MISS_FAULT        200U
 
 #define VCM_ADC_CONV_GUARD         720U   /* ~1.5 us: sample + conversion */
 #define VCM_ADC_KERNEL_HZ          24000000UL  /* PLL2P 96 MHz / ASYNC_DIV4 */
 #define VCM_ADC_SMP_CYCLES         16.5f       /* CubeMX 16.5; S&H at end of this */
 #define VCM_ADC_SMP_DELAY          ((uint16_t)(VCM_ADC_SMP_CYCLES * \
                                  ((float)VCM_HRTIM_CLOCK_HZ / (float)VCM_ADC_KERNEL_HZ) + 0.5f)) /* 330 */
-/* S&H length at the ADC kernel clock. The window is centered in the zero
- * vector after the active pulse, and the whole window stays >= 1 µs from
- * both the previous edge and the next one. Phase follows the pulse width. */
+/* S&H window: edge guard + sample + edge guard. Tri-level places it in the
+ * middle of each active pulse; bipolar still uses the two zero vectors. */
 #define VCM_ADC_EDGE_GUARD_NS      1500U
 #define VCM_ADC_EDGE_GUARD_CNT     ((uint16_t)(((uint32_t)VCM_ADC_EDGE_GUARD_NS * \
-                                   (VCM_HRTIM_CLOCK_HZ / 1000000UL)) / 1000UL)) /* 480 */
+                                   (VCM_HRTIM_CLOCK_HZ / 1000000UL)) / 1000UL)) /* 720 @ 1.5 µs */
 #define VCM_ADC_ZERO_MIN_CNT       ((uint16_t)(VCM_ADC_EDGE_GUARD_CNT + \
-                                   VCM_ADC_SMP_DELAY + VCM_ADC_EDGE_GUARD_CNT))
-/* Minimum zero-vector width for ONE S&H window (edge guard + S&H + guard).
- * Bipolar has two zeros of equal width (T − |diff|)/2 — both legs high in
- * [0, min(ca,cb)), both low in [max(ca,cb), PERIOD) — and samples one
- * window in each, so this bound applies to each zero, not to their sum. */
+                                   VCM_ADC_SMP_DELAY + VCM_ADC_EDGE_GUARD_CNT)) /* ≈1770 ≈3.7 µs */
+/* Tri-level coasts no longer host S&H; keep a short freewheel gap only. */
+#define VCM_TRI_COAST_MIN_NS       1000U
+#define VCM_TRI_COAST_MIN_CNT      ((uint16_t)(((uint32_t)VCM_TRI_COAST_MIN_NS * \
+                                   (VCM_HRTIM_CLOCK_HZ / 1000000UL)) / 1000UL)) /* 480 */
+/* Minimum zero-vector width for ONE S&H window (bipolar). */
 #define VCM_BIP_MOD_MAX            (((0.5f * (float)VCM_PWM_PERIOD) - \
                                    (float)VCM_ADC_ZERO_MIN_CNT) / (float)VCM_PWM_PERIOD)
-/* Tri-level second coast must leave two sample windows. The pulse floor
- * and the zero-region width are applied in VCM_ModMax. */
 #define VCM_ADC_N                  2U     /* two IFB conversions per PWM period */
 /* Min time between the two ADC triggers so the first conversion finishes. */
 #define VCM_ADC_TRIG_GAP           VCM_ADC_CONV_GUARD
@@ -280,16 +267,14 @@
 /* ADCTRG1 = Timer A CMP2 | CMP4. DMA length 2, MemInc on.
  * Pair validity comes from DMA TC latch (not REP-time NDTR==2).
  * CMP4 must stay ≤ PERIOD-CONV_GUARD so the 2nd conversion ends before REP.
- * Bipolar: one S&H in each zero vector — CMP2 in the leading zero
- * [0, min(ca,cb)), CMP4 in the trailing [max(ca,cb), PERIOD). Both are
- * (T−|diff|)/2 wide and each needs VCM_ADC_ZERO_MIN_CNT, so diff is
- * clamped to PERIOD − 2·ZERO_MIN in ApplyDuty. The pair brackets the
- * ripple, so its mean is the period average (no peak correction).
+ * Tri-level: one S&H in each active pulse [0,cnt_a) and [start_b,end_b).
+ * Mean ≈ period average. Pulse floor = cm ≥ ZERO_MIN. Short DCM/hold
+ * pulses fall back to coast windows. Bipolar unchanged (two zero vectors).
  * Pair miss holds last ifb_avg (no mid-edge dma[0]). */
 
 /* Gain-cal: UART force current (clamp meter) and rolling mean window */
 #define VCM_CAL_FORCE_A            0.50f
-#define VCM_CAL_AVG_ALPHA          (1.0f / 2550.0f) /* ~51 ms EMA @ 50 kHz */
+#define VCM_CAL_AVG_ALPHA          (1.0f / 1020.0f) /* ~51 ms EMA @ 20 kHz */
 
 #define VCM_DRV_EN_Pin             GPIO_PIN_0
 #define VCM_DRV_EN_GPIO_Port       GPIOB
@@ -301,13 +286,13 @@
 #define VCM_PROCESS_LED_Pin        GPIO_PIN_3
 #define VCM_PROCESS_LED_GPIO_Port  GPIOE
 
-#define VCM_EN_GLITCH_SAMPLES   20U  /* ~400 us @ 50 kHz */
+#define VCM_EN_GLITCH_SAMPLES   8U   /* ~400 us @ 20 kHz */
 #define VCM_EN_OFF_DEBOUNCE_MS  2U
 
 #define VCM_DIAG_EN             1
 #define VCM_DIAG_STEP_A         0.20f
 #define VCM_DIAG_DONE_BAND      0.10f
-#define VCM_DIAG_TIMEOUT_TICKS  1000U  /* 20 ms @ 50 kHz */
+#define VCM_DIAG_TIMEOUT_TICKS  400U   /* 20 ms @ 20 kHz */
 #define VCM_DIAG_UART_MARK      0
 
 /* UART cal cmds (ASCII; avoid 0x05 / 0xA0 used by IAP) */
@@ -320,12 +305,12 @@
 
 /* Host frames: "$" ... "\n" @ 115200. Avoid 0x05 / 0xA0 (IAP).
  *   $I  identify     $P  telemetry     $D  dump params
- *   $S kp=300 ki=300000 obs=61 lpf=314 ff=0 vbus=48000 r=3620 l=1188 fdbk=1 dt=400 cm=400 den=1 dx=120 de=10 n0=0 n1=0 n2=0 n3=0 gz=0 gs=350
+ *   $S kp=300 ki=300000 obs=146 lpf=607 ff=0 vbus=48000 r=3620 l=1188 fdbk=1 dt=400 cm=4000 den=0 dx=120 de=10 n0=0 n1=0 n2=0 n3=0 gz=0 gs=350
  *      (kp/obs/lpf/vbus/r ×1000, ki ×1000, ff ×1e6, l = µH,
- *       lpf = command IREF LPF α, 0.314≈3 kHz @ 50 kHz, 1.0 = off,
+ *       lpf = command IREF LPF α, 0.607≈3 kHz @ 20 kHz, 1.0 = off,
  *       fdbk 0=Kp and Ki on IFB, 1=Kp and Ki on î,
  *       dt = two-edge bipolar compensation ns, 0 = off,
- *       cm = tri-level min pulse ns (both sides), 200..2000, default 400,
+ *       cm = tri-level min pulse ns (both sides), 4000..20000, default 4000,
  *       den 0=DCM off (CCM PI) 1=allow DCM FF; dx = exit |iref| mA; de= compat,
  *       n0..n3 = current-command notch Hz, 0 = off,
  *       gz 0=one PI zone 1=standstill scale, gs = standstill scale ×1000)
@@ -354,6 +339,6 @@
 #define VCM_HW_VERSION          1U   /* PCB / hardware revision */
 #define VCM_FW_VERSION_MAJOR    1U
 #define VCM_FW_VERSION_MINOR    4U
-#define VCM_FW_VERSION_PATCH    115U /* CCM PI on î; coast IFB = innovation only */
+#define VCM_FW_VERSION_PATCH    120U /* 20 kHz; mid-pulse IFB; cm≥4 µs */
 
 #endif /* VCM_CONFIG_H */ 

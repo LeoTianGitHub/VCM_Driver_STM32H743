@@ -62,8 +62,8 @@ internal static class Protocol
     }
 
     /* fdbk: 0 = PI on ifb_avg, 1 = PI on observer î */
-    public const int TriCmNsMin = 200;
-    public const int TriCmNsMax = 2000;
+    public const int TriCmNsMin = 4000;
+    public const int TriCmNsMax = 20000;
 
     public static string SetLine(double kp, double ki, double obs, double lpf, double ff,
         double vbus, double rOhm, double lHenry, int fdbk, int dtNs, int cmNs,

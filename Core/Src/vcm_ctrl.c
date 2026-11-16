@@ -444,7 +444,8 @@ static float VCM_ModMax(void)
   {
     return VCM_BIP_MOD_MAX;
   }
-  coast = (float)VCM_ADC_ZERO_MIN_CNT / (float)VCM_PWM_PERIOD;
+  /* Tri-level S&H is in the pulses; coasts only need a short freewheel gap. */
+  coast = (float)VCM_TRI_COAST_MIN_CNT / (float)VCM_PWM_PERIOD;
   mmax = 0.5f - VCM_TriCmDuty() - coast;
   if (mmax > VCM_MOD_MAX)
   {
@@ -946,9 +947,9 @@ static void VCM_FaultPin_Set(bool fault_active)
                     fault_active ? VCM_FAULT_ACTIVE_LEVEL : VCM_FAULT_INACTIVE_LEVEL);
 }
 
-/* Place the S&H window in the middle of zero-vector [z0, z1]. The whole
- * window stays at least 1 µs from both edges. CMP2 is the trigger, which
- * is one S&H time before the hold instant. */
+/* Place the S&H window in the middle of [z0, z1] (pulse or zero vector).
+ * The whole window stays edge-guarded from both ends. CMP is the trigger,
+ * one S&H time before the hold instant. */
 VCM_ITCM
 static uint16_t VCM_AdcTrigForZero(uint16_t z0, uint16_t z1)
 {
@@ -1414,11 +1415,13 @@ static void VCM_HRTIM_ApplyDuty(float m)
   {
     float cm;
     uint16_t cm_cnt;
-    uint16_t coast_min = VCM_ADC_ZERO_MIN_CNT;
+    uint16_t pulse_min = VCM_ADC_ZERO_MIN_CNT; /* one mid-pulse S&H */
+    uint16_t coast_min = VCM_TRI_COAST_MIN_CNT;
     float m_dt = m;
 
     /* Hold / DCM: no forced dual cm. DCM+cm at small/zero I squeals under
-     * PMAC; FF still sets differential via one-sided 2·|m|. CCM keeps cm. */
+     * PMAC; FF still sets differential via one-sided 2·|m|. CCM keeps cm
+     * wide enough for mid-pulse ADC. */
     if ((g_vcm.iref_hold_en != 0U) || (g_vcm.dcm != 0U))
     {
       cm = 0.0f;
@@ -1428,6 +1431,11 @@ static void VCM_HRTIM_ApplyDuty(float m)
       cm = VCM_TriCmDuty();
     }
     cm_cnt = (uint16_t)(cm * (float)VCM_PWM_PERIOD + 0.5f);
+    if ((cm_cnt > 0U) && (cm_cnt < pulse_min))
+    {
+      cm_cnt = pulse_min;
+    }
+    cm = (float)cm_cnt / (float)VCM_PWM_PERIOD;
     /* Both pulses stay at least cm (0 in DCM). m lengthens one side. */
     if (m_dt >= 0.0f)
     {
@@ -1499,22 +1507,47 @@ static void VCM_HRTIM_ApplyDuty(float m)
     }
     g_vcm.adc_active_valid = 1U;
     {
-      uint16_t z_hi0 = cnt_a;
-      uint16_t z_hi1 = start_b;
-      uint16_t z_lo0 = (uint16_t)(start_b + cnt_b);
-      uint16_t z_lo1 = VCM_PWM_PERIOD;
+      uint16_t end_b = (uint16_t)(start_b + cnt_b);
+      uint16_t w0a;
+      uint16_t w1a;
+      uint16_t w0b;
+      uint16_t w1b;
+      uint16_t t0;
 
-      if (z_hi1 <= z_hi0)
+      /* Mid-pulse S&H when both pulses fit a full window; else coasts. */
+      if ((cnt_a >= pulse_min) && (cnt_b >= pulse_min))
       {
-        z_hi1 = (uint16_t)(z_hi0 + 2U);
+        w0a = 0U;
+        w1a = cnt_a;
+        w0b = start_b;
+        w1b = end_b;
       }
-      if (z_lo0 >= VCM_PWM_PERIOD)
+      else
       {
-        z_lo0 = (uint16_t)(VCM_PWM_PERIOD - 2U);
+        w0a = cnt_a;
+        w1a = start_b;
+        w0b = end_b;
+        w1b = VCM_PWM_PERIOD;
       }
-      VCM_HRTIM_SetAdcPhasePair(z_hi0, z_hi1, z_lo0, z_lo1);
+      if (w1a <= w0a)
       {
-        uint16_t t0 = VCM_AdcTrigForZero(z_hi0, z_hi1);
+        w1a = (uint16_t)(w0a + 2U);
+      }
+      if (w1b <= w0b)
+      {
+        w1b = (uint16_t)(w0b + 2U);
+      }
+      if (w1b > VCM_PWM_PERIOD)
+      {
+        w1b = VCM_PWM_PERIOD;
+      }
+      if (w0b >= VCM_PWM_PERIOD)
+      {
+        w0b = (uint16_t)(VCM_PWM_PERIOD - 2U);
+      }
+      VCM_HRTIM_SetAdcPhasePair(w0a, w1a, w0b, w1b);
+      t0 = VCM_AdcTrigForZero(w0a, w1a);
+      {
         uint32_t cmp3 = (uint32_t)t0 + (uint32_t)VCM_ADC_CONV_GUARD;
 
         if (cmp3 >= (uint32_t)(VCM_PWM_PERIOD - 2U))
@@ -2200,9 +2233,8 @@ void VCM_CurrentLoop_IRQHandler(void)
     }
   }
 
-  /* Bipolar samples both ends of the ripple — one S&H in each zero vector
-   * (see VCM_HRTIM_ApplyDuty) — so their mean already is the period
-   * average. No peak correction here. */
+  /* Tri-level: mean of mid-pulse pair ≈ period average. Bipolar: mean of
+   * the two zero-vector samples. No extra peak correction. */
 
 #if VCM_DIAG_EN
   VCM_DiagService();
@@ -2253,8 +2285,7 @@ void VCM_CurrentLoop_IRQHandler(void)
   VCM_CapPush();
 }
 
-/* −pulse for a +pulse that has already been scheduled. The coasts stay
- * long enough for the two samples. */
+/* −pulse for a +pulse that has already been scheduled. */
 VCM_ITCM
 static uint8_t VCM_TriSecondPulse(float m_dt, uint16_t cnt_a, uint16_t cm_cnt,
                                   uint16_t *start_b, uint16_t *cnt_b)
@@ -2266,7 +2297,7 @@ static uint8_t VCM_TriSecondPulse(float m_dt, uint16_t cnt_a, uint16_t cm_cnt,
   uint16_t sb;
   uint16_t remain;
   uint32_t cb_max;
-  const uint16_t coast_min = VCM_ADC_ZERO_MIN_CNT;
+  const uint16_t coast_min = VCM_TRI_COAST_MIN_CNT;
 
   if ((cnt_a < 1U) || (start_b == NULL) || (cnt_b == NULL))
   {
