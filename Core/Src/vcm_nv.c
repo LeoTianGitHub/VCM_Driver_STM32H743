@@ -21,7 +21,7 @@
 #include <string.h>
 
 /* Fixed prefix is 23×uint32 = 92 B; rsv fills the rest of the 256 B image. */
-#define VCM_NV_FIXED_U32  23U
+#define VCM_NV_FIXED_U32  24U
 
 typedef struct
 {
@@ -45,6 +45,7 @@ typedef struct
   uint32_t tri_cm_ns;   /* tri-level min pulse ns. version >= 13 */
   float dcm_exit_a;     /* version >= 14 */
   float dcm_exit_err_a; /* version >= 14 */
+  uint32_t dcm_en;      /* 0=off 1=allow DCM FF. version >= 15 */
   uint32_t rsv[(VCM_NV_BYTES / 4U) - VCM_NV_FIXED_U32];
 } VCM_Nv_t;
 
@@ -138,6 +139,7 @@ static void VCM_NvCapture(VCM_Nv_t *nv)
   nv->tri_cm_ns = (uint32_t)g_vcm.tri_cm_ns;
   nv->dcm_exit_a = g_vcm.dcm_exit_a;
   nv->dcm_exit_err_a = g_vcm.dcm_exit_err_a;
+  nv->dcm_en = (uint32_t)g_vcm.dcm_en;
   nv->crc = VCM_NvCrcBytes((const uint8_t *)nv, sizeof(*nv));
 }
 
@@ -232,6 +234,11 @@ static void VCM_NvApply(const VCM_Nv_t *nv)
   {
     float dx = nv->dcm_exit_a;
     float de = nv->dcm_exit_err_a;
+    /* Pre-1.4.106 default was 50 mA; that caused CCM +25 mA clamp error. */
+    if ((dx >= 0.049f) && (dx <= 0.051f))
+    {
+      dx = VCM_DCM_EXIT_A;
+    }
     if (dx < VCM_DCM_EXIT_A_MIN)
     {
       dx = VCM_DCM_EXIT_A_MIN;
@@ -250,6 +257,14 @@ static void VCM_NvApply(const VCM_Nv_t *nv)
     }
     g_vcm.dcm_exit_a = dx;
     g_vcm.dcm_exit_err_a = de;
+  }
+  if (nv->version >= 15U)
+  {
+    g_vcm.dcm_en = (nv->dcm_en != 0U) ? 1U : 0U;
+    if (g_vcm.dcm_en == 0U)
+    {
+      g_vcm.dcm = 0U;
+    }
   }
   VCM_NotchSync();
 }
@@ -497,6 +512,8 @@ int VCM_NvFactory(void)
   g_vcm.tri_cm_ns = VCM_TRI_CM_NS;
   g_vcm.dcm_exit_a = VCM_DCM_EXIT_A;
   g_vcm.dcm_exit_err_a = VCM_DCM_EXIT_ERR_A;
+  g_vcm.dcm_en = ((VCM_DCM_EN != 0U) && (VCM_DCM_EN_DEFAULT != 0U)) ? 1U : 0U;
+  g_vcm.dcm = 0U;
   g_vcm.notch_hz[0] = 0U;
   g_vcm.notch_hz[1] = 0U;
   g_vcm.notch_hz[2] = 0U;

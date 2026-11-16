@@ -19,10 +19,11 @@
 typedef enum
 {
   VCM_STATE_INIT = 0,
-  VCM_STATE_IDLE,
-  VCM_STATE_CALIB,
-  VCM_STATE_RUN,
-  VCM_STATE_FAULT
+  VCM_STATE_IDLE = 1,
+  /* Former on-enable CALIB; numbering frozen for $P / host StateName. */
+  VCM_STATE_RESERVED_2 = 2,
+  VCM_STATE_RUN = 3,
+  VCM_STATE_FAULT = 4
 } VCM_State_t;
 
 typedef struct
@@ -33,11 +34,10 @@ typedef struct
   float ifb_avg_a;     /* 2-pt duration-weighted mean (scope / OCP / UART G) */
   float ifb_hat_a;     /* observer current → PI */
   float ifb_filt_a;    /* Live: alias of ifb_hat_a */
-  float ifb_ip_a;      /* fixed-phase IFB (same instant as im) */
-  float ifb_im_a;      /* −coast sample */
+  float ifb_ip_a;      /* tri: after +pulse. bipolar: leading zero (ripple min) */
+  float ifb_im_a;      /* tri: after −pulse. bipolar: trailing zero (ripple max) */
   float ifb_raw_a;
   float ifb_offset_a;
-  float iref_cal_acc;
   float mod;
   float mod_ff;
   float integral;
@@ -49,39 +49,37 @@ typedef struct
   float vbus_v;        /* plant Vbus; observer + R-FF */
   float coil_l_h;      /* plant L */
   float coil_r_ohm;    /* plant R (coil; Rs added in observer/FF) */
-  float ifb_cal_acc;
   float iref_override_a;
   float cal_iref_mean;      /* EMA for UART 'G' */
   float cal_ifb_mean;
+  float ifb_off_est_a;      /* last background IFB zero-offset estimate */
+  uint32_t pair_miss_cnt;   /* total missed DMA pairs (diagnostic) */
   uint32_t fault_flags;
   uint32_t adc1_ovr_cnt;
   uint32_t adc2_ovr_cnt;
   uint16_t adc_ifb;
   uint16_t adc_iref;
-  uint16_t ifb_cal_count;
   VCM_State_t state;
   uint8_t adc_active_valid;
   uint8_t adc_pair_ok;        /* 1 = fresh DMA-TC pair (I+ and I−) consumed */
   uint8_t pwm_armed;
-  uint8_t calib_valid;
   uint8_t iref_override_en;
   uint8_t iref_hold_en;       /* 1 = UART 'Z': PI off, equal dither */
-  uint8_t pi_fdbk;            /* VCM_PI_FDBK_*: 0=ifb_avg 1=ifb_hat */
+  uint8_t pi_fdbk;            /* VCM_PI_FDBK_*: 0=ifb_avg 1=î for Kp and Ki */
   uint8_t pwm_mode;           /* VCM_PWM_MODE_*; Live Expr / UART B|T */
   uint16_t drv_dt_ns;         /* dead-time compensation width, ns; 0 = off */
   uint16_t tri_cm_ns;         /* tri-level min pulse both sides, ns */
   uint16_t notch_hz[4];       /* current-command notches, Hz; 0 = off */
   float gz_scale;             /* standstill Kp/Ki scale, 0.05..1 */
-  float dcm_exit_a;           /* leave DCM when |iref| > this; $S dx= */
-  float dcm_exit_err_a;       /* and |iref−ifb| < this; $S de= */
+  float dcm_exit_a;           /* DCM exit |iref|; $S dx= */
+  float dcm_exit_err_a;       /* DCM exit |iref−ifb|; $S de= (compat) */
   uint8_t gz_en;              /* 0 = one zone, 1 = lower gain when command is quiet */
   uint8_t gz_hold;            /* 1 = standstill scale is applied this period */
-  uint8_t dcm;                /* 1 = small-I FF mode (tri-level); Live / $D */
+  uint8_t dcm_en;             /* 0 = force CCM PI; 1 = allow DCM FF; $S den= */
+  uint8_t dcm;                /* 1 = DCM FF active (tri-level small-I) */
   uint32_t isr_ticks;
   uint32_t start_count;
   uint32_t stop_count;
-  uint32_t calib_count;
-  uint32_t calib_reuse_count;
   uint32_t exti_count;
   uint32_t fault_count;
   uint32_t en_glitch_count;

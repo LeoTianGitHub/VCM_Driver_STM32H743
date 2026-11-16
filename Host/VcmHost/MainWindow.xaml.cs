@@ -67,6 +67,11 @@ public partial class MainWindow : Window
     private bool _syncingIref;
     private bool _irefDragging;
     private int _lastIrefMaSent = int.MinValue;
+    private int _irefSeq;
+    private int _pendingIrefSeq = -1;
+    private int _irefRetryLeft;
+    private double _pendingIrefAmps;
+    private DateTime _irefAckDeadline = DateTime.MinValue;
     private bool _syncingObs;
     private bool _syncingLpf;
     private bool _syncingMode;
@@ -195,6 +200,7 @@ public partial class MainWindow : Window
         if (_link.IsOpen)
         {
             _poll.Stop();
+            ClearIrefAckWait();
             _link.Close();
             ConnectBtn.Content = "连接";
             LinkText.Text = "● 断开";
@@ -298,6 +304,18 @@ public partial class MainWindow : Window
             return;
         }
 
+        /* $R ACK pending: do not enqueue $P (TL can bury / reorder OK). */
+        if (_link.HoldPolls || _pendingIrefSeq >= 0)
+        {
+            if (_pendingIrefSeq >= 0 && DateTime.UtcNow > _irefAckDeadline)
+            {
+                AppendLog($"WARN $R s={_pendingIrefSeq} 超时无匹配 ACK");
+                ClearIrefAckWait();
+            }
+
+            return;
+        }
+
         ApplyPollInterval();
         if (_awaitingTl && (DateTime.UtcNow - _lastPoll).TotalMilliseconds < 250)
         {
@@ -376,16 +394,7 @@ public partial class MainWindow : Window
         AppendLog(line);
         if (line.StartsWith("OK iref_ma=", StringComparison.Ordinal))
         {
-            var ack = Protocol.ParseFields(line);
-            var got = Protocol.Int(ack, "iref_ma", int.MinValue);
-            if (_lastIrefMaSent != int.MinValue && got != _lastIrefMaSent)
-            {
-                AppendLog($"WARN RX iref_ma={got} != TX {_lastIrefMaSent} mA");
-            }
-            else if (got != int.MinValue)
-            {
-                AppendLog($"RX OK 固件覆盖={got} mA ({got / 1000.0:0.###} A)");
-            }
+            HandleIrefAck(line);
         }
         if (_pendingBaud != 0 && line.StartsWith("ERR", StringComparison.Ordinal))
         {
@@ -572,6 +581,13 @@ public partial class MainWindow : Window
                 .ToString(CultureInfo.InvariantCulture);
         }
 
+        if (m.ContainsKey("den"))
+        {
+            var on = Protocol.Int(m, "den") != 0;
+            DcmOn.IsChecked = on;
+            DcmOff.IsChecked = !on;
+        }
+
         if (m.ContainsKey("dx_e3"))
         {
             DcmExitBox.Text = Protocol.Milli(m, "dx_e3").ToString("0.###", CultureInfo.InvariantCulture);
@@ -652,7 +668,7 @@ public partial class MainWindow : Window
         }
 
         FlagText.Text =
-            $"ov={Protocol.Int(m, "ov")}  hold={Protocol.Int(m, "hold")}  armed={Protocol.Int(m, "armed")}  pair={Protocol.Int(m, "pair")}  fdbk={Protocol.Int(m, "fdbk")}  增益={(Protocol.Int(m, "gz") == 0 ? "单段" : Protocol.Int(m, "gzh") != 0 ? "静止" : "运动")}  ovr={Protocol.Int(m, "ovr1")}/{Protocol.Int(m, "ovr2")}";
+            $"ov={Protocol.Int(m, "ov")}  hold={Protocol.Int(m, "hold")}  armed={Protocol.Int(m, "armed")}  pair={Protocol.Int(m, "pair")}  fdbk={Protocol.Int(m, "fdbk")}  den={Protocol.Int(m, "den")}  dcm={Protocol.Int(m, "dcm")}  增益={(Protocol.Int(m, "gz") == 0 ? "单段" : Protocol.Int(m, "gzh") != 0 ? "静止" : "运动")}  ovr={Protocol.Int(m, "ovr1")}/{Protocol.Int(m, "ovr2")}";
 
         if (m.ContainsKey("mode"))
         {
@@ -1215,7 +1231,7 @@ public partial class MainWindow : Window
         }
         else
         {
-            hz = Math.Clamp(hz, 1, 50000);
+            hz = Math.Clamp(hz, 1, Protocol.PwmHz);
         }
         n = Math.Clamp(n, 1, 16384);
         _plotHz = hz;
@@ -1296,18 +1312,19 @@ public partial class MainWindow : Window
         }
 
         var lines = Math.Max(1, (baud / 10) / 119);
-        return Math.Clamp(lines * 8, 1, 50000);
+        return Math.Clamp(lines * 8, 1, Protocol.PwmHz);
     }
 
     private static int SnapControlHz(int hz, int cap)
     {
-        hz = Math.Clamp(hz, 1, 50000);
-        var div = Math.Clamp((50000 + hz / 2) / hz, 1, 50000);
-        var actual = 50000 / div;
-        while (actual > cap && div < 50000)
+        var pwm = Protocol.PwmHz;
+        hz = Math.Clamp(hz, 1, pwm);
+        var div = Math.Clamp((pwm + hz / 2) / hz, 1, pwm);
+        var actual = pwm / div;
+        while (actual > cap && div < pwm)
         {
             div++;
-            actual = 50000 / div;
+            actual = pwm / div;
         }
 
         return Math.Max(1, actual);
@@ -1437,6 +1454,92 @@ public partial class MainWindow : Window
         SendIrefOverride(a);
     }
 
+    private void ClearIrefAckWait()
+    {
+        _pendingIrefSeq = -1;
+        _irefRetryLeft = 0;
+        _link.HoldPolls = false;
+    }
+
+    private void HandleIrefAck(string line)
+    {
+        var ack = Protocol.ParseFields(line);
+        var got = Protocol.Int(ack, "iref_ma", int.MinValue);
+        var s = Protocol.Int(ack, "s", -1);
+
+        /* Stale OK from an older $R (no s= or wrong s) — ignore / retry. */
+        if (_pendingIrefSeq >= 0)
+        {
+            if (s >= 0 && s != _pendingIrefSeq)
+            {
+                AppendLog($"IGN OK iref_ma={got} s={s} (wait s={_pendingIrefSeq})");
+                return;
+            }
+
+            if (s < 0 && got != _lastIrefMaSent)
+            {
+                /* Old firmware without s=: treat ma mismatch as stale if we
+                 * still have retries, else warn. */
+                if (_irefRetryLeft > 0)
+                {
+                    _irefRetryLeft--;
+                    AppendLog($"WARN RX iref_ma={got} != TX {_lastIrefMaSent} mA — 重发");
+                    DispatchIrefFrame(_pendingIrefAmps, retry: false);
+                    return;
+                }
+
+                AppendLog($"WARN RX iref_ma={got} != TX {_lastIrefMaSent} mA");
+                ClearIrefAckWait();
+                return;
+            }
+
+            ClearIrefAckWait();
+            if (got != int.MinValue)
+            {
+                AppendLog($"RX OK 固件覆盖={got} mA ({got / 1000.0:0.###} A) s={s}");
+            }
+
+            return;
+        }
+
+        if (_lastIrefMaSent != int.MinValue && got != _lastIrefMaSent)
+        {
+            AppendLog($"WARN RX iref_ma={got} != TX {_lastIrefMaSent} mA");
+        }
+        else if (got != int.MinValue)
+        {
+            AppendLog($"RX OK 固件覆盖={got} mA ({got / 1000.0:0.###} A)");
+        }
+    }
+
+    private void DispatchIrefFrame(double amps, bool retry)
+    {
+        if (_irefSeq >= 1_000_000_000)
+        {
+            _irefSeq = 1;
+        }
+        else
+        {
+            _irefSeq++;
+        }
+
+        var ma = (int)Math.Round(amps * 1000.0);
+        _lastIrefMaSent = ma;
+        _pendingIrefAmps = amps;
+        _pendingIrefSeq = _irefSeq;
+        if (retry)
+        {
+            _irefRetryLeft = 1;
+        }
+
+        _irefAckDeadline = DateTime.UtcNow.AddMilliseconds(800);
+        _link.HoldPolls = true;
+        _link.ClearTx();
+        var line = Protocol.IrefLine(amps, _irefSeq);
+        _link.SendExclusive(line);
+        AppendLog($"TX {line.TrimEnd()}  ({amps.ToString("0.###", CultureInfo.InvariantCulture)} A)");
+    }
+
     private void SendIrefOverride(double amps)
     {
         if (!_link.IsOpen)
@@ -1450,13 +1553,8 @@ public partial class MainWindow : Window
         IrefSlider.Value = amps;
         IrefCmdBox.Text = amps.ToString("0.000", CultureInfo.InvariantCulture);
         _syncingIref = false;
-        var ma = (int)Math.Round(amps * 1000.0);
-        _lastIrefMaSent = ma;
-        var line = Protocol.IrefLine(amps);
-        /* Drop queued $P so $R cannot be delayed behind a long TL reply. */
-        _link.SendExclusive(line);
-        /* Protocol unit is mA: "$R ma=5" means 0.005 A, not 5 A. */
-        AppendLog($"TX {line.TrimEnd()}  ({amps.ToString("0.###", CultureInfo.InvariantCulture)} A)");
+        /* Protocol unit is mA: "$R ma=5;s=n" means 0.005 A, not 5 A. */
+        DispatchIrefFrame(amps, retry: true);
     }
 
     private void SetIrefUi(double amps)
@@ -1682,6 +1780,7 @@ public partial class MainWindow : Window
         p.Fdbk = FdbkObs.IsChecked == true ? 1 : 0;
         p.DtNs = (int)Math.Clamp(Math.Round(dtNs), 0, 1000);
         p.CmNs = (int)Math.Clamp(Math.Round(cmNs), Protocol.TriCmNsMin, Protocol.TriCmNsMax);
+        p.DcmEn = DcmOn.IsChecked == true ? 1 : 0;
         p.DcmExitA = Math.Clamp(dcmExitA, 0.05, 2.0);
         p.DcmExitErrA = Math.Clamp(dcmExitErrA, 0.01, 0.5);
         p.N0 = ClampNotch(n0);
@@ -1713,13 +1812,16 @@ public partial class MainWindow : Window
         DtBox.Text = Math.Clamp(p.DtNs, 0, 1000).ToString(CultureInfo.InvariantCulture);
         CmBox.Text = Math.Clamp(p.CmNs <= 0 ? 400 : p.CmNs, Protocol.TriCmNsMin, Protocol.TriCmNsMax)
             .ToString(CultureInfo.InvariantCulture);
-        DcmExitBox.Text = ParamFile.Fmt(Math.Clamp(p.DcmExitA <= 0 ? 0.05 : p.DcmExitA, 0.05, 2.0), "0.###");
+        DcmExitBox.Text = ParamFile.Fmt(Math.Clamp(p.DcmExitA <= 0 ? 0.12 : p.DcmExitA, 0.05, 2.0), "0.###");
         DcmErrBox.Text = ParamFile.Fmt(Math.Clamp(p.DcmExitErrA <= 0 ? 0.01 : p.DcmExitErrA, 0.01, 0.5), "0.###");
         Notch0Box.Text = ClampNotch(p.N0).ToString(CultureInfo.InvariantCulture);
         Notch1Box.Text = ClampNotch(p.N1).ToString(CultureInfo.InvariantCulture);
         Notch2Box.Text = ClampNotch(p.N2).ToString(CultureInfo.InvariantCulture);
         Notch3Box.Text = ClampNotch(p.N3).ToString(CultureInfo.InvariantCulture);
         GsBox.Text = ParamFile.Fmt(Math.Clamp(p.Gs <= 0 ? 0.35 : p.Gs, 0.05, 1.0), "0.###");
+        var dcmOn = p.DcmEn != 0;
+        DcmOn.IsChecked = dcmOn;
+        DcmOff.IsChecked = !dcmOn;
         var two = p.Gz != 0;
         GzOn.IsChecked = two;
         GzOff.IsChecked = !two;
@@ -1740,7 +1842,7 @@ public partial class MainWindow : Window
     {
         var vbus = Math.Clamp(p.Vbus, Protocol.VbusMin, Protocol.VbusMax);
         _link.Send(Protocol.SetLine(p.Kp, p.Ki, p.Obs, p.Lpf, p.Ff, vbus, p.R, p.LMh * 0.001, p.Fdbk, p.DtNs, p.CmNs,
-            p.DcmExitA, p.DcmExitErrA, p.N0, p.N1, p.N2, p.N3, p.Gz, p.Gs));
+            p.DcmEn, p.DcmExitA, p.DcmExitErrA, p.N0, p.N1, p.N2, p.N3, p.Gz, p.Gs));
         AppendLog("写入参数");
     }
 

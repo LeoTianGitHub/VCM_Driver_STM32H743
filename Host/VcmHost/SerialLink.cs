@@ -75,11 +75,17 @@ internal sealed class SerialLink : IDisposable
         while (_tx.TryDequeue(out _)) { }
     }
 
+    /* Clear the queue, then enqueue one command. IoLoop is single-threaded so
+     * each Write is still one full string; this only drops stale $P/$R. */
     public void SendExclusive(string text)
     {
         ClearTx();
         Send(text);
     }
+
+    /* True while the UI is waiting for a matched $R ACK — callers should not
+     * enqueue $P (long TL replies delay / reorder OK lines). */
+    public bool HoldPolls { get; set; }
 
     public void Close()
     {

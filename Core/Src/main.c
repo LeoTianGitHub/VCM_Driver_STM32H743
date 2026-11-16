@@ -70,7 +70,7 @@ static void ProcessLed_Service(void)
   {
     period_ms = 100U;
   }
-  else if ((g_vcm.state == VCM_STATE_RUN) || (g_vcm.state == VCM_STATE_CALIB))
+  else if (g_vcm.state == VCM_STATE_RUN)
   {
     period_ms = 1000U;
   }

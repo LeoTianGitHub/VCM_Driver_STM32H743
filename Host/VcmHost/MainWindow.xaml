@@ -249,6 +249,7 @@
                                     <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
                                     <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
                                     <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
+                                    <RowDefinition/>
                                 </Grid.RowDefinitions>
                                 <Label Grid.Row="0" Content="Kp"/>
                                 <TextBox x:Name="KpBox" Grid.Row="0" Grid.Column="1" Margin="0,3" Text="0.3"/>
@@ -257,7 +258,7 @@
                                 <Label Grid.Row="2" Content="PI 反馈" VerticalAlignment="Center"/>
                                 <WrapPanel Grid.Row="2" Grid.Column="1" Margin="0,3">
                                     <RadioButton x:Name="FdbkObs" Content="观测 î" IsChecked="True" Margin="0,0,12,4"
-                                                 GroupName="PiFdbk" ToolTip="fdbk=1：PiStep(iref, ifb_hat)"/>
+                                                 GroupName="PiFdbk" ToolTip="fdbk=1：Kp/Ki 都跟 î（周期平均）；coast IFB 只作观测创新"/>
                                 <RadioButton x:Name="FdbkAvg" Content="单点 IFB" Margin="0,0,12,4" GroupName="PiFdbk"
                                              ToolTip="fdbk=0：电流环用两段续流的平均电流。"/>
                                 </WrapPanel>
@@ -290,34 +291,43 @@
                                 <Label Grid.Row="12" Content="CM (ns)"/>
                                 <TextBox x:Name="CmBox" Grid.Row="12" Grid.Column="1" Margin="0,3" Text="400"
                                          ToolTip="三电平两侧最小脉宽，默认 400 ns（200–2000）。指令只加长一边。UART Z 时两边都关。"/>
-                                <Label Grid.Row="13" Content="DCM 退出 (A)"/>
-                                <TextBox x:Name="DcmExitBox" Grid.Row="13" Grid.Column="1" Margin="0,3" Text="0.05"
-                                         ToolTip="|iref| 大于此值才允许退出 DCM（$S dx=，单位 A，默认 0.05）。"/>
-                                <Label Grid.Row="14" Content="DCM |e| (A)"/>
-                                <TextBox x:Name="DcmErrBox" Grid.Row="14" Grid.Column="1" Margin="0,3" Text="0.01"
-                                         ToolTip="退出 DCM 还要求 |iref−ifb| 小于此值（$S de=，默认 0.01 A）。"/>
-                                <Label Grid.Row="15" Content="陷波1 Hz"/>
-                                <TextBox x:Name="Notch0Box" Grid.Row="15" Grid.Column="1" Margin="0,3" Text="0"
+                                <Label Grid.Row="13" Content="DCM" VerticalAlignment="Center"/>
+                                <WrapPanel Grid.Row="13" Grid.Column="1" Margin="0,3">
+                                    <RadioButton x:Name="DcmOn" Content="开" Margin="0,0,12,4"
+                                                 GroupName="DcmEn"
+                                                 ToolTip="den=1：小电流 DCM 前馈。仅开环电流标定用；PMAC 位置闭环会抖，勿开。"/>
+                                    <RadioButton x:Name="DcmOff" Content="关" IsChecked="True" Margin="0,0,12,4"
+                                                 GroupName="DcmEn"
+                                                 ToolTip="den=0：全程 CCM+PI（默认）。PMAC 闭环请保持关闭。"/>
+                                </WrapPanel>
+                                <Label Grid.Row="14" Content="DCM 退出 (A)"/>
+                                <TextBox x:Name="DcmExitBox" Grid.Row="14" Grid.Column="1" Margin="0,3" Text="0.12"
+                                         ToolTip="|iref|≥此值退出 DCM（$S dx=，默认 0.12 A）。仅 den=1 时有效。"/>
+                                <Label Grid.Row="15" Content="DCM |e| (A)"/>
+                                <TextBox x:Name="DcmErrBox" Grid.Row="15" Grid.Column="1" Margin="0,3" Text="0.01"
+                                         ToolTip="$S de= 保留兼容；当前退出不看 IFB。"/>
+                                <Label Grid.Row="16" Content="陷波1 Hz"/>
+                                <TextBox x:Name="Notch0Box" Grid.Row="16" Grid.Column="1" Margin="0,3" Text="0"
                                          ToolTip="电流指令陷波，0 关闭。Q=5。"/>
-                                <Label Grid.Row="16" Content="陷波2 Hz"/>
-                                <TextBox x:Name="Notch1Box" Grid.Row="16" Grid.Column="1" Margin="0,3" Text="0"
+                                <Label Grid.Row="17" Content="陷波2 Hz"/>
+                                <TextBox x:Name="Notch1Box" Grid.Row="17" Grid.Column="1" Margin="0,3" Text="0"
                                          ToolTip="0 关闭"/>
-                                <Label Grid.Row="17" Content="陷波3 Hz"/>
-                                <TextBox x:Name="Notch2Box" Grid.Row="17" Grid.Column="1" Margin="0,3" Text="0"
+                                <Label Grid.Row="18" Content="陷波3 Hz"/>
+                                <TextBox x:Name="Notch2Box" Grid.Row="18" Grid.Column="1" Margin="0,3" Text="0"
                                          ToolTip="0 关闭"/>
-                                <Label Grid.Row="18" Content="陷波4 Hz"/>
-                                <TextBox x:Name="Notch3Box" Grid.Row="18" Grid.Column="1" Margin="0,3" Text="0"
+                                <Label Grid.Row="19" Content="陷波4 Hz"/>
+                                <TextBox x:Name="Notch3Box" Grid.Row="19" Grid.Column="1" Margin="0,3" Text="0"
                                          ToolTip="0 关闭"/>
-                                <Label Grid.Row="19" Content="增益" VerticalAlignment="Center"/>
-                                <WrapPanel Grid.Row="19" Grid.Column="1" Margin="0,3">
+                                <Label Grid.Row="20" Content="增益" VerticalAlignment="Center"/>
+                                <WrapPanel Grid.Row="20" Grid.Column="1" Margin="0,3">
                                     <RadioButton x:Name="GzOff" Content="单段" IsChecked="True" Margin="0,0,12,4"
                                                  GroupName="GainZone"
                                                  ToolTip="gz=0：Kp、Ki 全程不变。"/>
                                     <RadioButton x:Name="GzOn" Content="两段" Margin="0,0,12,4" GroupName="GainZone"
                                                  ToolTip="gz=1：电流指令变慢约 40 ms 后，Kp 和 Ki 同时乘静止比例。运动时约 2 ms 恢复。不看电流大小，也不看电流误差。"/>
                                 </WrapPanel>
-                                <Label Grid.Row="20" Content="静止比例"/>
-                                <TextBox x:Name="GsBox" Grid.Row="20" Grid.Column="1" Margin="0,3" Text="0.35"
+                                <Label Grid.Row="21" Content="静止比例"/>
+                                <TextBox x:Name="GsBox" Grid.Row="21" Grid.Column="1" Margin="0,3" Text="0.35"
                                          ToolTip="静止时 Kp、Ki 同乘这个数。0.35 约把 820 Hz 增益降 9 dB。"/>
                             </Grid>
                             <TextBlock Margin="0,8,0,8" Foreground="{StaticResource MuteBrush}" TextWrapping="Wrap"
