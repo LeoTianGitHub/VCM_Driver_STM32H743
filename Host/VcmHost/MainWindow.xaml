@@ -252,15 +252,15 @@
                                     <RowDefinition/>
                                 </Grid.RowDefinitions>
                                 <Label Grid.Row="0" Content="Kp"/>
-                                <TextBox x:Name="KpBox" Grid.Row="0" Grid.Column="1" Margin="0,3" Text="0.3"/>
+                                <TextBox x:Name="KpBox" Grid.Row="0" Grid.Column="1" Margin="0,3" Text="0.05"/>
                                 <Label Grid.Row="1" Content="Ki"/>
-                                <TextBox x:Name="KiBox" Grid.Row="1" Grid.Column="1" Margin="0,3" Text="300"/>
+                                <TextBox x:Name="KiBox" Grid.Row="1" Grid.Column="1" Margin="0,3" Text="0"/>
                                 <Label Grid.Row="2" Content="PI 反馈" VerticalAlignment="Center"/>
                                 <WrapPanel Grid.Row="2" Grid.Column="1" Margin="0,3">
-                                    <RadioButton x:Name="FdbkObs" Content="观测 î" IsChecked="True" Margin="0,0,12,4"
-                                                 GroupName="PiFdbk" ToolTip="fdbk=1：Kp/Ki 都跟 î（周期平均）；coast IFB 只作观测创新"/>
-                                <RadioButton x:Name="FdbkAvg" Content="单点 IFB" Margin="0,0,12,4" GroupName="PiFdbk"
-                                             ToolTip="fdbk=0：电流环用两段续流的平均电流。"/>
+                                    <RadioButton x:Name="FdbkObs" Content="观测 î" Margin="0,0,12,4"
+                                                 GroupName="PiFdbk" ToolTip="fdbk=1：Kp/Ki 都跟 î"/>
+                                <RadioButton x:Name="FdbkAvg" Content="单点 IFB" IsChecked="True" Margin="0,0,12,4" GroupName="PiFdbk"
+                                             ToolTip="fdbk=0：两点脉内 IFB 平均（默认）。"/>
                                 </WrapPanel>
                                 <Label Grid.Row="3" Content="观测 α"/>
                                 <TextBox x:Name="ObsBox" Grid.Row="3" Grid.Column="1" Margin="0,3" Text="0.061"

@@ -96,10 +96,9 @@
 #define VCM_IREF_COUNTS_PER_A   (VCM_IREF_V_PER_A * VCM_ADC_COUNTS_PER_V)
 #define VCM_IREF_POLARITY       (-1.0f)
 
-/* Single-zone PI @ 20 kHz. Retune kp/ki on the bench after the rate change.
- * Default fdbk=1: Kp and Ki on î. fdbk=0 uses 2-point mid-pulse IFB average. */
-#define VCM_KP                  0.30f
-#define VCM_KI                  300.0f
+/* Single-zone PI @ 20 kHz. Default fdbk=0: Kp/Ki on mid-pulse IFB average. */
+#define VCM_KP                  0.05f
+#define VCM_KI                  0.0f
 /* Must sit at or above VCM_ModMax(): at steady state err→0, so m ≈ integral
  * and an integral clamped below the modulator ceiling makes every command
  * above that point unreachable no matter how large Kp is. Tri-level ModMax
@@ -124,7 +123,7 @@
 /* PI feedback: 0 = Kp and Ki on ifb_avg. 1 = Kp and Ki on ifb_hat (î). */
 #define VCM_PI_FDBK_AVG         0U
 #define VCM_PI_FDBK_OBS         1U
-#define VCM_PI_FDBK_DEFAULT     VCM_PI_FDBK_OBS
+#define VCM_PI_FDBK_DEFAULT     VCM_PI_FDBK_AVG
 
 /* Plant FF: bipolar Vcoil ≈ 2·m·Vbus. L-FF off while tuning PI. */
 #define VCM_COIL_L_H            0.001188f
@@ -305,7 +304,7 @@
 
 /* Host frames: "$" ... "\n" @ 115200. Avoid 0x05 / 0xA0 (IAP).
  *   $I  identify     $P  telemetry     $D  dump params
- *   $S kp=300 ki=300000 obs=146 lpf=607 ff=0 vbus=48000 r=3620 l=1188 fdbk=1 dt=400 cm=4000 den=0 dx=120 de=10 n0=0 n1=0 n2=0 n3=0 gz=0 gs=350
+ *   $S kp=50 ki=0 obs=146 lpf=607 ff=0 vbus=48000 r=3620 l=1188 fdbk=0 dt=400 cm=4000 den=0 dx=120 de=10 n0=0 n1=0 n2=0 n3=0 gz=0 gs=350
  *      (kp/obs/lpf/vbus/r ×1000, ki ×1000, ff ×1e6, l = µH,
  *       lpf = command IREF LPF α, 0.607≈3 kHz @ 20 kHz, 1.0 = off,
  *       fdbk 0=Kp and Ki on IFB, 1=Kp and Ki on î,
@@ -339,6 +338,6 @@
 #define VCM_HW_VERSION          1U   /* PCB / hardware revision */
 #define VCM_FW_VERSION_MAJOR    1U
 #define VCM_FW_VERSION_MINOR    4U
-#define VCM_FW_VERSION_PATCH    120U /* 20 kHz; mid-pulse IFB; cm≥4 µs */
+#define VCM_FW_VERSION_PATCH    121U /* default fdbk=IFB, kp=0.05, ki=0 */
 
 #endif /* VCM_CONFIG_H */ 
