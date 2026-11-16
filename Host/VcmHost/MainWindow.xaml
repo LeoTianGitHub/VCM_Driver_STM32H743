@@ -282,9 +282,9 @@
                                 <TextBox x:Name="VbusBox" Grid.Row="8" Grid.Column="1" Margin="0,3" Text="48"
                                          ToolTip="24–48 V"/>
                                 <Label Grid.Row="9" Content="R (Ω)"/>
-                                <TextBox x:Name="RcoilBox" Grid.Row="9" Grid.Column="1" Margin="0,3" Text="3.62"/>
+                                <TextBox x:Name="RcoilBox" Grid.Row="9" Grid.Column="1" Margin="0,3" Text="5.42"/>
                                 <Label Grid.Row="10" Content="L (mH)"/>
-                                <TextBox x:Name="LcoilBox" Grid.Row="10" Grid.Column="1" Margin="0,3" Text="1.188"/>
+                                <TextBox x:Name="LcoilBox" Grid.Row="10" Grid.Column="1" Margin="0,3" Text="0.912"/>
                                 <Label Grid.Row="11" Content="t_d (ns)"/>
                                 <TextBox x:Name="DtBox" Grid.Row="11" Grid.Column="1" Margin="0,3" Text="400"
                                          ToolTip="双极性死区补偿，两个沿合计，默认 400 ns。0 关闭。三电平不用此值。"/>

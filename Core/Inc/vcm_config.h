@@ -1,9 +1,9 @@
 /**
  * @file    vcm_config.h
- * @brief   VCM current loop - PI + R/L FF, three-level PWM @ 20 kHz
+ * @brief   Wire-feed current loop - PI + R/L FF, three-level PWM @ 20 kHz
  *
- * Structure resonance fn≈820 Hz. Wide bilateral cm so ADC S&H sits inside
- * each +/-Vbus pulse (period-average IFB). Symmetric ripple is above the
+ * 1 A plant, 200 mΩ shunt. Wide bilateral cm so ADC S&H sits inside each
+ * +/-Vbus pulse (period-average IFB). Symmetric ripple is above the
  * mechanics. PWM stays enabled (no idle clamp).
  */
 #ifndef VCM_CONFIG_H
@@ -43,7 +43,7 @@
 #define VCM_HALF_TS_S              (VCM_PWM_TS_S * 0.5f)
 /* Both tri-level pulses stay at least this wide while the current loop
  * is closed, including at zero command. Must fit one S&H window (≈3.7 µs
- * with 1.5 µs edge guards). Default 4 µs → ~160 mA p-p @ 48 V / 1.2 mH;
+ * with 1.5 µs edge guards). Default 4 µs → ~210 mA p-p @ 48 V / 0.91 mH;
  * symmetric, above the mechanics. Host $S cm=<ns>. UART Z holds both off. */
 #define VCM_TRI_CM_NS              4000U
 #define VCM_TRI_CM_NS_MIN          4000U
@@ -71,28 +71,28 @@
  * (period-average proxy). Half-PI off: −pulse not reshaped mid-period.
  */
 
-#define VCM_I_MAX_A             10.0f
-#define VCM_I_OCP_A             12.0f
+#define VCM_I_MAX_A             1.0f
+#define VCM_I_OCP_A             1.2f
 #define VCM_OCP_CONFIRM_SAMPLES 4U
 
 #define VCM_ADC_MID             32768.0f
 #define VCM_ADC_VREF_V          3.0f
 #define VCM_ADC_COUNTS_PER_V    (VCM_ADC_MID / VCM_ADC_VREF_V)
 
-/* IFB: RS + TPA8001 → ADC1. Adjust GAIN_TRIM after clamp meter vs g_vcm.ifb_a */
-#define VCM_IFB_RS_OHM          0.020f
+/* IFB: RS + TPA8001 → ADC1. 200 mΩ × 8.2 ≈ 1.64 V/A → ~±1 A full scale. */
+#define VCM_IFB_RS_OHM          0.200f
 #define VCM_IFB_TPA8001_GAIN    8.2f
 #define VCM_IFB_GAIN_TRIM       1.0f
 #define VCM_IFB_V_PER_A         (VCM_IFB_GAIN_TRIM * VCM_IFB_TPA8001_GAIN * VCM_IFB_RS_OHM)
 #define VCM_IFB_COUNTS_PER_A    (VCM_IFB_V_PER_A * VCM_ADC_COUNTS_PER_V)
 #define VCM_IFB_POLARITY        (-1.0f)
 
-/* IREF: ±20 V * op-amp G=0.15 → ±3 V ADC = ±10 A */
+/* IREF: ±20 V * op-amp G=0.15 → ±3 V ADC = ±1 A */
 #define VCM_IREF_VIN_FULL_V     20.0f
 #define VCM_IREF_DIFF_GAIN      0.15f
 #define VCM_IREF_GAIN_TRIM      1.0f
 #define VCM_IREF_V_PER_A        (VCM_IREF_GAIN_TRIM * VCM_IREF_DIFF_GAIN * \
-                                 VCM_IREF_VIN_FULL_V / VCM_I_MAX_A) /* 0.3 V/A */
+                                 VCM_IREF_VIN_FULL_V / VCM_I_MAX_A) /* 3.0 V/A */
 #define VCM_IREF_COUNTS_PER_A   (VCM_IREF_V_PER_A * VCM_ADC_COUNTS_PER_V)
 #define VCM_IREF_POLARITY       (-1.0f)
 
@@ -126,8 +126,8 @@
 #define VCM_PI_FDBK_DEFAULT     VCM_PI_FDBK_AVG
 
 /* Plant FF: bipolar Vcoil ≈ 2·m·Vbus. L-FF off while tuning PI. */
-#define VCM_COIL_L_H            0.001188f
-#define VCM_COIL_R_OHM          3.62f
+#define VCM_COIL_L_H            0.000912f /* 912 µH */
+#define VCM_COIL_R_OHM          5.42f
 #define VCM_VBUS_V              48.0f
 #define VCM_VBUS_MIN_V          24.0f
 #define VCM_VBUS_MAX_V          48.0f
@@ -304,7 +304,7 @@
 
 /* Host frames: "$" ... "\n" @ 115200. Avoid 0x05 / 0xA0 (IAP).
  *   $I  identify     $P  telemetry     $D  dump params
- *   $S kp=50 ki=0 obs=146 lpf=607 ff=0 vbus=48000 r=3620 l=1188 fdbk=0 dt=400 cm=4000 den=0 dx=120 de=10 n0=0 n1=0 n2=0 n3=0 gz=0 gs=350
+ *   $S kp=50 ki=0 obs=146 lpf=607 ff=0 vbus=48000 r=5420 l=912 fdbk=0 dt=400 cm=4000 den=0 dx=120 de=10 n0=0 n1=0 n2=0 n3=0 gz=0 gs=350
  *      (kp/obs/lpf/vbus/r ×1000, ki ×1000, ff ×1e6, l = µH,
  *       lpf = command IREF LPF α, 0.607≈3 kHz @ 20 kHz, 1.0 = off,
  *       fdbk 0=Kp and Ki on IFB, 1=Kp and Ki on î,
@@ -338,6 +338,6 @@
 #define VCM_HW_VERSION          1U   /* PCB / hardware revision */
 #define VCM_FW_VERSION_MAJOR    1U
 #define VCM_FW_VERSION_MINOR    4U
-#define VCM_FW_VERSION_PATCH    121U /* default fdbk=IFB, kp=0.05, ki=0 */
+#define VCM_FW_VERSION_PATCH    200U /* wire-feed 1 A / 200 mΩ @ 20 kHz */
 
-#endif /* VCM_CONFIG_H */ 
+#endif /* VCM_CONFIG_H */
