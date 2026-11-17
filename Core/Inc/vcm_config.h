@@ -2,9 +2,9 @@
  * @file    vcm_config.h
  * @brief   Wire-feed current loop - PI + R/L FF, three-level PWM @ 20 kHz
  *
- * 1 A plant, 200 mΩ shunt. Wide bilateral cm so ADC S&H sits inside each
- * +/-Vbus pulse (period-average IFB). Symmetric ripple is above the
- * mechanics. PWM stays enabled (no idle clamp).
+ * 1 A plant, 20 mΩ shunt (same sense as Z; ADC span is ~1/10 of ±10 A).
+ * Wide bilateral cm so ADC S&H sits inside each +/-Vbus pulse. Symmetric
+ * ripple is above the mechanics. PWM stays enabled (no idle clamp).
  */
 #ifndef VCM_CONFIG_H
 #define VCM_CONFIG_H
@@ -79,8 +79,8 @@
 #define VCM_ADC_VREF_V          3.0f
 #define VCM_ADC_COUNTS_PER_V    (VCM_ADC_MID / VCM_ADC_VREF_V)
 
-/* IFB: RS + TPA8001 → ADC1. 200 mΩ × 8.2 ≈ 1.64 V/A → ~±1 A full scale. */
-#define VCM_IFB_RS_OHM          0.200f
+/* IFB: RS + TPA8001 → ADC1. 20 mΩ × 8.2 = 0.164 V/A (board shunt). */
+#define VCM_IFB_RS_OHM          0.020f
 #define VCM_IFB_TPA8001_GAIN    8.2f
 #define VCM_IFB_GAIN_TRIM       1.0f
 #define VCM_IFB_V_PER_A         (VCM_IFB_GAIN_TRIM * VCM_IFB_TPA8001_GAIN * VCM_IFB_RS_OHM)
@@ -338,6 +338,6 @@
 #define VCM_HW_VERSION          1U   /* PCB / hardware revision */
 #define VCM_FW_VERSION_MAJOR    1U
 #define VCM_FW_VERSION_MINOR    4U
-#define VCM_FW_VERSION_PATCH    200U /* wire-feed 1 A / 200 mΩ @ 20 kHz */
+#define VCM_FW_VERSION_PATCH    201U /* wire-feed 1 A / 20 mΩ IFB @ 20 kHz */
 
 #endif /* VCM_CONFIG_H */

@@ -1,6 +1,6 @@
 # VCM Host（WPF）— 送丝 1 A @ 20 kHz
 
-STM32H743 送丝电流环调试上位机（量程 ±1 A，采样 200 mΩ）。USART1 **115200 8N1**（PB14 TX / PB15 RX）。
+STM32H743 送丝电流环调试上位机（量程 ±1 A，采样 20 mΩ）。USART1 **115200 8N1**（PB14 TX / PB15 RX）。
 
 ## 运行
 
@@ -39,11 +39,11 @@ IAP 升级只擦 Sector 1–2，不会清掉参数。不要对 Sector3 做全片
 
 | 主机 | 从机 |
 |------|------|
-| `$I` | `ID … fw=1.4.200 pwm=20000`；送丝 1 A；默认 fdbk=0、kp=0.05、ki=0；`cm`=4000 ns；`den=0` |
+| `$I` | `ID … fw=1.4.201 pwm=20000`；送丝 1 A / 20 mΩ IFB；默认 fdbk=0、kp=0.05、ki=0；`cm`=4000 ns；`den=0` |
 | `$S den=` | `0`=CCM+PI（默认，PMAC 用）；`1`=小电流 DCM（仅开环标定） |
 | `$S dx=/de=` | DCM 退出 |iref|（mA）；`de=` 保留兼容，退出不再看 IFB |
 | `$P` | `TL iref_ma=… ihat_ma=… iavg_ma=… gz=0|1 gzh=0|1 …`（gzh=1 表示正在用静止比例；CCM 下 ihat≈钳表，iavg 可偏低） |
-| `$D` | `PR hw=1 fw=1.4.200 proto=5 … fdbk=0 cm_ns=4000 r=5420 l=912 …`（送丝 1 A / 200 mΩ；20 kHz 脉内 IFB；默认 kp=0.05 ki=0 fdbk=0。gz 0=单段 1=两段，mode 0=双极性 1=三电平） |
+| `$D` | `PR hw=1 fw=1.4.201 proto=5 … fdbk=0 cm_ns=4000 r=5420 l=912 …`（送丝 1 A / 20 mΩ；20 kHz 脉内 IFB；默认 kp=0.05 ki=0 fdbk=0。gz 0=单段 1=两段，mode 0=双极性 1=三电平） |
 | `$S kp=… ki=… obs=… lpf=… ff=… vbus=… r=… l=… fdbk=0|1 dt=<ns> n0=<Hz> n1=<Hz> n2=<Hz> n3=<Hz> gz=0|1 gs=<×1000>` | `OK` / `ERR`（vbus/r ×1000，l=µH；dt 为双极性两个沿的补偿 ns，默认 400，0 关闭，写入后立即生效。三电平不用这项，闭环时两边至少各 600 ns，指令只加长一边；开环保持时两边都关。n0–n3 为电流指令陷波 Hz，0 关闭；gs 为静止时 Kp/Ki 比例 ×1000，默认 350） |
 | `$R 500` | IREF 覆盖 0.500 A（PI 开；满量程 1 A） |
 | `$K` | `DT BUSY`，结束后 `DT ns=… pos=… neg=…`。机构停住、驱动使能。失败为 `DT ERR run/abort/fit` |
