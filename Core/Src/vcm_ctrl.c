@@ -254,9 +254,8 @@ static void VCM_IobsUpdate(float ifb, uint8_t meas_ok)
     {
       a = 1.0f;
     }
-    /* CCM: floor α so host obs= below A_CCM still keeps mild IFB innovation.
- * A_CCM is near DCM (not 0.85) so î tracks 2mVbus/R, not low coast IFB. */
-    if ((g_vcm.dcm == 0U) && (a < VCM_I_OBS_A_CCM))
+    /* CCM: cap α so coast IFB cannot drag î below period avg (clamp high). */
+    if ((g_vcm.dcm == 0U) && (a > VCM_I_OBS_A_CCM))
     {
       a = VCM_I_OBS_A_CCM;
     }
@@ -946,39 +945,37 @@ static void VCM_FaultPin_Set(bool fault_active)
                     fault_active ? VCM_FAULT_ACTIVE_LEVEL : VCM_FAULT_INACTIVE_LEVEL);
 }
 
-/* Place the S&H window in the middle of zero-vector [z0, z1]. The whole
- * window stays at least 1 µs from both edges. CMP2 is the trigger, which
- * is one S&H time before the hold instant. */
+/* Place the S&H window in zero-vector [z0, z1]. Hold ~70% into the window
+ * (early post-edge sampling was noisier on the bench). CMP before hold. */
 VCM_ITCM
 static uint16_t VCM_AdcTrigForZero(uint16_t z0, uint16_t z1)
 {
   uint32_t guard = (uint32_t)VCM_ADC_EDGE_GUARD_CNT;
   uint32_t win = (uint32_t)VCM_ADC_SMP_DELAY;
-  uint32_t center;
   uint32_t trig;
   uint32_t hold;
   uint32_t min_trig;
   uint32_t max_hold;
+  uint32_t span;
+  uint32_t room;
 
   if (z1 <= (uint16_t)(z0 + 2U))
   {
     z1 = (uint16_t)(z0 + 2U);
   }
-  center = ((uint32_t)z0 + (uint32_t)z1) / 2U;
   if (win < 2U)
   {
     win = 2U;
   }
-  hold = center + (win / 2U);
-  trig = hold - win;
   min_trig = (uint32_t)z0 + guard;
   max_hold = (uint32_t)z1 - guard;
   if ((min_trig + win) > max_hold)
   {
-    center = ((uint32_t)z0 + (uint32_t)z1) / 2U;
-    if (center > win)
+    /* Window too tight: fall back to a centered placement. */
+    hold = ((uint32_t)z0 + (uint32_t)z1) / 2U;
+    if (hold > win)
     {
-      trig = center - (win / 2U);
+      trig = hold - (win / 2U);
     }
     else
     {
@@ -987,15 +984,26 @@ static uint16_t VCM_AdcTrigForZero(uint16_t z0, uint16_t z1)
   }
   else
   {
-    if (trig < min_trig)
-    {
-      trig = min_trig;
-    }
-    hold = trig + win;
+    /* NUM/DEN along the guarded span; 0 = earliest (post-pulse + guard). */
+    span = max_hold - min_trig;
+    room = span - win;
+    hold = min_trig + win +
+           ((room * (uint32_t)VCM_ADC_COAST_HOLD_NUM) /
+            (uint32_t)VCM_ADC_COAST_HOLD_DEN);
     if (hold > max_hold)
     {
       hold = max_hold;
-      trig = hold - win;
+    }
+    trig = hold - win;
+    if (trig < min_trig)
+    {
+      trig = min_trig;
+      hold = trig + win;
+      if (hold > max_hold)
+      {
+        hold = max_hold;
+        trig = hold - win;
+      }
     }
   }
   if (trig < 2U)
@@ -2011,20 +2019,21 @@ void VCM_CurrentLoop_IRQHandler(void)
       g_vcm.adc_ifb = raw0;
       i0 = VCM_AdcToIfbAmpere(raw0) - g_vcm.ifb_offset_a;
       i1 = VCM_AdcToIfbAmpere(raw1) - g_vcm.ifb_offset_a;
-      i_samp = 0.5f * (i0 + i1);
+      i_samp = 0.5f * (i0 + i1); /* raw period mean — OCP */
       g_vcm.ifb_ip_a = i0;
       g_vcm.ifb_im_a = i1;
       g_vcm.adc_pair_ok = 1U;
       g_vcm.ifb_raw_a = i_samp + g_vcm.ifb_offset_a;
       g_vcm.ifb_a = i_samp;
-      g_vcm.ifb_avg_a = i_samp;
+      /* Multi-period EMA for PI / observer / TL iavg. */
+      g_vcm.ifb_avg_a += VCM_IFB_MA_A * (i_samp - g_vcm.ifb_avg_a);
     }
     else
     {
       /* Missed TC: do not chase a mid-edge dma[0] (bipolar pair drops used
-       * to walk Ki to tens of mA at iref=0). Hold last good average. */
+       * to walk Ki to tens of mA at iref=0). Hold last raw for OCP. */
       g_vcm.adc_pair_ok = 0U;
-      i_samp = g_vcm.ifb_avg_a;
+      i_samp = g_vcm.ifb_a;
       i0 = g_vcm.ifb_ip_a;
       g_vcm.pair_miss_cnt++;
       if (vcm_pair_miss_run < 0xFFFFU)
@@ -4103,4 +4112,3 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     VCM_ServiceDrvEnable();
   }
 }
-  

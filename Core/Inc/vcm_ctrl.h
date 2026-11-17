@@ -31,7 +31,7 @@ typedef struct
   float iref_a;
   float iref_offset_a;
   float ifb_a;
-  float ifb_avg_a;     /* 2-pt duration-weighted mean (scope / OCP / UART G) */
+  float ifb_avg_a;     /* multi-period EMA of 2-pt coast mean (PI / obs / TL) */
   float ifb_hat_a;     /* observer current → PI */
   float ifb_filt_a;    /* Live: alias of ifb_hat_a */
   float ifb_ip_a;      /* tri: after +pulse. bipolar: leading zero (ripple min) */

@@ -96,8 +96,8 @@
 #define VCM_IREF_POLARITY       (-1.0f)
 
 /* Single-zone PI @ 50 kHz: fc≈3.9 kHz (zero ~32 Hz).
- * Default fdbk=1: Kp and Ki on î (period-avg voltage model). Coast IFB is
- * innovation only. Host $S fdbk=0 puts both terms on the 2-point IFB average. */
+ * Default fdbk=1: Kp and Ki on î. Coast IFB (multi-period EMA) is innovation
+ * only. Host $S fdbk=0 puts both terms on the EMA'd 2-point coast average. */
 #define VCM_KP                  0.30f
 #define VCM_KI                  300.0f
 /* Must sit at or above VCM_ModMax(): at steady state err→0, so m ≈ integral
@@ -156,9 +156,10 @@
  */
 #define VCM_I_OBS_HZ            500.0f
 #define VCM_I_OBS_A             0.0609f  /* host obs=61 @ 50 kHz; DCM keeps this */
-/* CCM: keep α near DCM so î follows 2mVbus/R (period avg), not low coast IFB.
- * Old 0.85 forced î≈iavg → PI/Ki on IFB made clamp ≈ cmd+25 mA. */
-#define VCM_I_OBS_A_CCM         0.15f
+/* CCM: CAP α (not floor). Coast IFB under-reads vs clamp; strong innovation
+ * pulls î low → PI raises m → clamp ≈ cmd+15…25 mA even with fdbk=1.
+ * Weak α keeps î ≈ 2mVbus/R (period avg). Old floor 0.15 still biased 10 mA. */
+#define VCM_I_OBS_A_CCM         0.02f
 #define VCM_I_OBS_R_OHM         (VCM_COIL_R_OHM + VCM_IFB_RS_OHM)
 #define VCM_I_OBS_TS_OVER_L     (VCM_PWM_TS_S / VCM_COIL_L_H)
 
@@ -257,14 +258,15 @@
 #define VCM_ADC_SMP_CYCLES         16.5f       /* CubeMX 16.5; S&H at end of this */
 #define VCM_ADC_SMP_DELAY          ((uint16_t)(VCM_ADC_SMP_CYCLES * \
                                  ((float)VCM_HRTIM_CLOCK_HZ / (float)VCM_ADC_KERNEL_HZ) + 0.5f)) /* 330 */
-/* S&H length at the ADC kernel clock. The window is centered in the zero
- * vector after the active pulse, and the whole window stays >= 1 µs from
- * both the previous edge and the next one. Phase follows the pulse width. */
+/* S&H in each coast. Early (NUM=0) ate switch residue and tracked worse on
+ * the bench; keep hold ~70% into the window (away from the leading edge). */
 #define VCM_ADC_EDGE_GUARD_NS      1500U
 #define VCM_ADC_EDGE_GUARD_CNT     ((uint16_t)(((uint32_t)VCM_ADC_EDGE_GUARD_NS * \
                                    (VCM_HRTIM_CLOCK_HZ / 1000000UL)) / 1000UL)) /* 480 */
 #define VCM_ADC_ZERO_MIN_CNT       ((uint16_t)(VCM_ADC_EDGE_GUARD_CNT + \
                                    VCM_ADC_SMP_DELAY + VCM_ADC_EDGE_GUARD_CNT))
+#define VCM_ADC_COAST_HOLD_NUM     7U   /* hold at NUM/DEN of guarded span */
+#define VCM_ADC_COAST_HOLD_DEN     10U
 /* Minimum zero-vector width for ONE S&H window (edge guard + S&H + guard).
  * Bipolar has two zeros of equal width (T − |diff|)/2 — both legs high in
  * [0, min(ca,cb)), both low in [max(ca,cb), PERIOD) — and samples one
@@ -276,15 +278,16 @@
 #define VCM_ADC_N                  2U     /* two IFB conversions per PWM period */
 /* Min time between the two ADC triggers so the first conversion finishes. */
 #define VCM_ADC_TRIG_GAP           VCM_ADC_CONV_GUARD
+/* Multi-period EMA of the 2-pt coast mean for PI / observer. N=16 @ 50 kHz
+ * ≈ 3 kHz; noise ≈ /4. OCP still uses the raw single-period mean. */
+#define VCM_IFB_MA_N               16U
+#define VCM_IFB_MA_A               (1.0f / (float)VCM_IFB_MA_N)
 
 /* ADCTRG1 = Timer A CMP2 | CMP4. DMA length 2, MemInc on.
  * Pair validity comes from DMA TC latch (not REP-time NDTR==2).
  * CMP4 must stay ≤ PERIOD-CONV_GUARD so the 2nd conversion ends before REP.
- * Bipolar: one S&H in each zero vector — CMP2 in the leading zero
- * [0, min(ca,cb)), CMP4 in the trailing [max(ca,cb), PERIOD). Both are
- * (T−|diff|)/2 wide and each needs VCM_ADC_ZERO_MIN_CNT, so diff is
- * clamped to PERIOD − 2·ZERO_MIN in ApplyDuty. The pair brackets the
- * ripple, so its mean is the period average (no peak correction).
+ * Tri-level / bipolar: one S&H in each coast, hold ~70% into the window.
+ * Mean of the pair + MA feeds the loop; ip/im stay raw.
  * Pair miss holds last ifb_avg (no mid-edge dma[0]). */
 
 /* Gain-cal: UART force current (clamp meter) and rolling mean window */
@@ -354,6 +357,6 @@
 #define VCM_HW_VERSION          1U   /* PCB / hardware revision */
 #define VCM_FW_VERSION_MAJOR    1U
 #define VCM_FW_VERSION_MINOR    4U
-#define VCM_FW_VERSION_PATCH    115U /* CCM PI on î; coast IFB = innovation only */
+#define VCM_FW_VERSION_PATCH    119U /* CCM obs α cap 0.02 (fdbk=1 clamp bias) */
 
 #endif /* VCM_CONFIG_H */ 
