@@ -226,7 +226,7 @@ VCM_ITCM
 void HRTIM1_TIMA_IRQHandler(void)
 {
   /* USER CODE BEGIN HRTIM1_TIMA_IRQn 0 */
-  /* Fast path: REP @ 50 kHz; CMP3 half-PI only if compiled in. */
+  /* Fast path: REP @ 20 kHz; CMP3 half-PI only if compiled in. */
   uint32_t rep = __HAL_HRTIM_TIMER_GET_FLAG(&hhrtim, HRTIM_TIMERINDEX_TIMER_A,
                                             HRTIM_TIM_FLAG_REP);
 #if (VCM_HALF_PI_EN != 0U)

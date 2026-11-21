@@ -192,7 +192,7 @@ int main(void)
     Error_Handler();
   }
 
-  /* Override Cube defaults: 50 kHz PWM + current loop */
+  /* Override Cube defaults: 20 kHz PWM + current loop */
   VCM_HRTIM_InitTimers();
   VCM_Init();
   if (VCM_AdcStart() != 0)
@@ -562,7 +562,7 @@ static void MX_HRTIM_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN HRTIM_Init 2 */
-  /* Real 50 kHz / dead-time applied by VCM_HRTIM_InitTimers() after this. */
+  /* Real 20 kHz / dead-time applied by VCM_HRTIM_InitTimers() after this. */
   /* USER CODE END HRTIM_Init 2 */
   HAL_HRTIM_MspPostInit(&hhrtim);
 

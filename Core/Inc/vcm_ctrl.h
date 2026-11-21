@@ -31,11 +31,11 @@ typedef struct
   float iref_a;
   float iref_offset_a;
   float ifb_a;
-  float ifb_avg_a;     /* multi-period EMA of 2-pt coast mean (PI / obs / TL) */
+  float ifb_avg_a;     /* multi-period EMA of 2-pt mean (PI / obs / TL) */
   float ifb_hat_a;     /* observer current → PI */
   float ifb_filt_a;    /* Live: alias of ifb_hat_a */
-  float ifb_ip_a;      /* tri: after +pulse. bipolar: leading zero (ripple min) */
-  float ifb_im_a;      /* tri: after −pulse. bipolar: trailing zero (ripple max) */
+  float ifb_ip_a;      /* tri: inside +pulse. bipolar: leading zero (ripple min) */
+  float ifb_im_a;      /* tri: inside −pulse. bipolar: trailing zero (ripple max) */
   float ifb_raw_a;
   float ifb_offset_a;
   float mod;
@@ -44,8 +44,8 @@ typedef struct
   float kp;
   float ki;
   float ff_mod_per_a;
-  float iref_lpf_a;    /* command LPF α; 0.314 ≈ 3 kHz @ 50 kHz; 1.0 = off */
-  float i_obs_a;       /* observer α; 0.0609 ≈ 500 Hz @ 50 kHz */
+  float iref_lpf_a;    /* command LPF α; 0.610 ≈ 3 kHz @ 20 kHz; 1.0 = off */
+  float i_obs_a;       /* observer α; 0.145 ≈ 500 Hz @ 20 kHz */
   float vbus_v;        /* plant Vbus; observer + R-FF */
   float coil_l_h;      /* plant L */
   float coil_r_ohm;    /* plant R (coil; Rs added in observer/FF) */

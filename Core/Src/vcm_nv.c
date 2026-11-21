@@ -266,6 +266,41 @@ static void VCM_NvApply(const VCM_Nv_t *nv)
       g_vcm.dcm = 0U;
     }
   }
+  /* v16: factory defaults are cm=400 ns and PI on î. Older slots often had
+   * fdbk=0 and/or a wider cm; one-shot migrate so a flash upgrade takes effect
+   * without $E. Later $W keeps the user's choice under version 16+. */
+  if (nv->version < 16U)
+  {
+    g_vcm.pi_fdbk = VCM_PI_FDBK_DEFAULT;
+    g_vcm.tri_cm_ns = VCM_TRI_CM_NS;
+  }
+  /* v17: drop the unmeasured 400 ns default. A later $S dt= / $K then $W
+   * keeps the measured blanking under version 17+. */
+  if (nv->version < 17U)
+  {
+    g_vcm.drv_dt_ns = VCM_DRV_DT_NS;
+  }
+  /* v18: dual narrow pulses, cm = 400 ns. Later $S cm= then $W keeps it. */
+  if (nv->version < 18U)
+  {
+    g_vcm.tri_cm_ns = VCM_TRI_CM_NS;
+  }
+  /* v19: PWM/control rate 20 kHz. Retune LPF/obs α for the same Hz. */
+  if (nv->version < 19U)
+  {
+    g_vcm.iref_lpf_a = VCM_IREF_OVR_LPF_A;
+    g_vcm.i_obs_a = VCM_I_OBS_A;
+  }
+  /* v20: in-pulse S&H needs cm >= 1.2 µs. */
+  if (nv->version < 20U)
+  {
+    g_vcm.tri_cm_ns = VCM_TRI_CM_NS;
+  }
+  /* v21: default cm = 2500 ns. */
+  if (nv->version < 21U)
+  {
+    g_vcm.tri_cm_ns = VCM_TRI_CM_NS;
+  }
   VCM_NotchSync();
 }
 
@@ -275,6 +310,8 @@ static void VCM_NvApplyLegacy64(const VCM_NvLegacy64_t *nv)
                   nv->iref_lpf_a, nv->ff_mod_per_a, nv->vbus_v,
                   nv->coil_l_h, nv->coil_r_ohm, nv->pi_fdbk);
   g_vcm.ff_mod_per_a = 0.0f;
+  g_vcm.pi_fdbk = VCM_PI_FDBK_DEFAULT;
+  g_vcm.tri_cm_ns = VCM_TRI_CM_NS;
   VCM_NotchSync();
 }
 

@@ -4,7 +4,7 @@ namespace VcmHost;
 
 internal static class Protocol
 {
-    public const int PwmHz = 50000;
+    public const int PwmHz = 20000;
     public const double IMaxA = 10.0;
     public const double VbusMin = 24.0;
     public const double VbusMax = 48.0;
@@ -63,7 +63,7 @@ internal static class Protocol
 
     /* fdbk: 0 = PI on ifb_avg, 1 = PI on observer î */
     public const int TriCmNsMin = 200;
-    public const int TriCmNsMax = 2000;
+    public const int TriCmNsMax = 5000;
 
     public static string SetLine(double kp, double ki, double obs, double lpf, double ff,
         double vbus, double rOhm, double lHenry, int fdbk, int dtNs, int cmNs,

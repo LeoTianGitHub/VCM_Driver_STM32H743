@@ -39,12 +39,12 @@ IAP 升级只擦 Sector 1–2，不会清掉参数。不要对 Sector3 做全片
 
 | 主机 | 从机 |
 |------|------|
-| `$I` | `ID … fw=1.4.119 pwm=50000`；续流约 70% 采样；CCM î α≤0.02；`den=0` |
+| `$I` | `ID … fw=1.4.147 pwm=20000`；三电平双边脉冲，每侧至少 cm（默认 2500 ns）；脉冲内各采样一次、一次 PI |
 | `$S den=` | `0`=CCM+PI（默认，PMAC 用）；`1`=小电流 DCM（仅开环标定） |
 | `$S dx=/de=` | DCM 退出 |iref|（mA）；`de=` 保留兼容，退出不再看 IFB |
-| `$P` | `TL iref_ma=… ihat_ma=… iavg_ma=…`（iavg=续流两点均值的 16 周期 EMA；ip/im 为当周期原始两点） |
-| `$D` | `PR hw=1 fw=1.4.119 proto=5 … fdbk=1 …`（续流约 70%；CCM î α cap；OCP 单周期。fdbk 0=EMA IFB；1=î。gz 0=单段 1=两段，mode 0=双极性 1=三电平） |
-| `$S kp=… ki=… obs=… lpf=… ff=… vbus=… r=… l=… fdbk=0|1 dt=<ns> n0=<Hz> n1=<Hz> n2=<Hz> n3=<Hz> gz=0|1 gs=<×1000>` | `OK` / `ERR`（vbus/r ×1000，l=µH；dt 为双极性两个沿的补偿 ns，默认 400，0 关闭，写入后立即生效。三电平不用这项，闭环时两边至少各 600 ns，指令只加长一边；开环保持时两边都关。n0–n3 为电流指令陷波 Hz，0 关闭；gs 为静止时 Kp/Ki 比例 ×1000，默认 350） |
+| `$P` | `TL … iavg_ma=… ip_ma=… im_ma=…`（三电平：脉冲内两点；双极性：续流两点；iavg 为两点平均） |
+| `$D` | `PR hw=1 fw=1.4.147 … fdbk=1 dt_ns=… cm=…`（三电平两侧脉冲都至少 cm，默认 2500 ns；采样在脉冲内） |
+| `$S … fdbk=0|1 dt=<ns> cm=<ns> …` | `OK`/`ERR`；`cm` 为每一侧脉冲最小宽度 ns（200–5000） |
 | `$R 1500` | IREF 覆盖 1.500 A（PI 开） |
 | `$K` | `DT BUSY`，结束后 `DT ns=… pos=… neg=…`。机构停住、驱动使能。失败为 `DT ERR run/abort/fit` |
 | `$O` | 一次性标定 IREF 零偏。**上位机必须先保证模拟 IREF 输入为 0 V 并保持 10 ms**。先回 `IREFZ BUSY`，再回 `IREFZ <mA>`。失败为 `IREFZ ERR override`（当前在 `$R` 覆盖态，先 `$A`）/ `range`（读数超 ±50 mA，说明输入并非 0 V）/ `nosample`（500 ms 内没拿到新的 ADC 配对） |

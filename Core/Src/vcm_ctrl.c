@@ -22,6 +22,7 @@ static float VCM_DtCalAmp(uint8_t step);
 static void VCM_HRTIM_SetAdcPhase(uint16_t z0, uint16_t z1);
 static void VCM_HRTIM_SetAdcPhasePair(uint16_t z0a, uint16_t z1a,
                                       uint16_t z0b, uint16_t z1b);
+static void VCM_AdcSyncNow(void);
 static void VCM_ConfigHalfBridge(uint32_t timer_idx, uint32_t output1, uint32_t output2);
 static void VCM_FaultPin_Set(bool fault_active);
 static void VCM_LoopStateReset(void);
@@ -60,7 +61,7 @@ static uint8_t vcm_chop_b = 0xFFU;
 static uint16_t vcm_idle_deb;
 static float vcm_iref_z1;
 static int8_t vcm_tri_sign; /* +1: A chops / B low; -1: B chops / A low; 0: unset */
-static float vcm_pi_ref;     /* notched command from the 50 kHz step */
+static float vcm_pi_ref;     /* notched command from the 20 kHz step */
 static float vcm_base_i0;    /* previous period's first-coast sample */
 static float vcm_base_avg;   /* previous period's coast average */
 static volatile uint32_t vcm_pair_seq;  /* even: dma pair below is stable */
@@ -69,7 +70,7 @@ static volatile uint16_t vcm_pair_raw1;
 static uint32_t vcm_pair_taken;
 static uint8_t vcm_base_ok;
 static uint8_t vcm_half_done;   /* 1 = the −pulse step integrated VCM_HALF_TS_S */
-static uint8_t vcm_rep_closed;  /* 1 = this period's 50 kHz PI ran */
+static uint8_t vcm_rep_closed;  /* 1 = this period's 20 kHz PI ran */
 static uint8_t vcm_next_valid;  /* next period has a tri-level −pulse */
 static uint8_t vcm_act_valid;
 static uint16_t vcm_next_cnt_a;
@@ -85,6 +86,8 @@ static uint16_t vcm_act_cmp3;
 static uint16_t vcm_act_b1;
 static uint16_t vcm_act_b2;
 static uint8_t vcm_run_bip = 1U; /* 1 = bipolar waveform this period */
+static uint8_t vcm_adc_len;       /* ADC1 DMA conversions / period */
+static volatile uint8_t vcm_adc_sync_req;
 static uint8_t vcm_gz_hold;
 static uint8_t vcm_gz_seed;
 static uint16_t vcm_gz_tick;
@@ -254,7 +257,7 @@ static void VCM_IobsUpdate(float ifb, uint8_t meas_ok)
     {
       a = 1.0f;
     }
-    /* CCM: cap α so coast IFB cannot drag î below period avg (clamp high). */
+    /* CCM: optional α cap (defaults to full obs α once IFB pairs are trusted). */
     if ((g_vcm.dcm == 0U) && (a > VCM_I_OBS_A_CCM))
     {
       a = VCM_I_OBS_A_CCM;
@@ -311,7 +314,7 @@ static void VCM_IobsUpdate(float ifb, uint8_t meas_ok)
   g_vcm.ifb_filt_a = i;
 }
 
-/* w0 stays below pi/2 for f0 <= 10 kHz at 50 kHz. Main-loop NotchDesign only. */
+/* w0 stays below pi/2 for f0 <= 5 kHz at 20 kHz. Main-loop NotchDesign only. */
 static float VCM_Sin(float x)
 {
   float x2 = x * x;
@@ -443,7 +446,8 @@ static float VCM_ModMax(void)
   {
     return VCM_BIP_MOD_MAX;
   }
-  coast = (float)VCM_ADC_ZERO_MIN_CNT / (float)VCM_PWM_PERIOD;
+  /* Both pulses at least cm; leave a small gap between them. */
+  coast = (float)VCM_ADC_EDGE_GUARD_CNT / (float)VCM_PWM_PERIOD;
   mmax = 0.5f - VCM_TriCmDuty() - coast;
   if (mmax > VCM_MOD_MAX)
   {
@@ -553,8 +557,8 @@ static float VCM_GainZoneScale(float ref, float err)
 
 /*
  * m = Kp*e_p + Ki*∫e_i + R·I_ff + L·di/dt_ff
- * Observer mode: Kp and Ki on î (period-avg). Coast IFB feeds the observer
- * only. fdbk=0 puts both terms on the 2-point IFB average.
+ * Observer mode: Kp on î, Ki on IFB EMA (force accuracy + damping).
+ * fdbk=0 puts both terms on the 2-point IFB average.
  * Back-calculation anti-windup uses the applied modulation.
  */
 VCM_ITCM
@@ -840,7 +844,7 @@ static float VCM_PiStep(float ref, float fdbk_p, float fdbk_i, float ts, uint8_t
   }
   else
   {
-    /* Gain-zone ticks stay at 50 kHz. The half step only reuses the scale. */
+    /* Gain-zone ticks stay at the control rate. Half step reuses the scale. */
     kp = g_vcm.kp * vcm_gz_s;
     ki = g_vcm.ki * vcm_gz_s;
   }
@@ -945,8 +949,8 @@ static void VCM_FaultPin_Set(bool fault_active)
                     fault_active ? VCM_FAULT_ACTIVE_LEVEL : VCM_FAULT_INACTIVE_LEVEL);
 }
 
-/* Place the S&H window in zero-vector [z0, z1]. Hold ~70% into the window
- * (early post-edge sampling was noisier on the bench). CMP before hold. */
+/* Place the S&H window in interval [z0, z1] (pulse or zero). Hold ~70%
+ * into the window. Short windows fall back to a centered S&H. */
 VCM_ITCM
 static uint16_t VCM_AdcTrigForZero(uint16_t z0, uint16_t z1)
 {
@@ -1057,6 +1061,10 @@ static void VCM_HRTIM_WriteAdcTrigs(uint16_t trig_a, uint16_t trig_b)
   }
   __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_COMPAREUNIT_2, trig_a);
   __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_COMPAREUNIT_4, trig_b);
+  /* Bipolar: both compares are ADC triggers. */
+  hhrtim.Instance->sCommonRegs.ADC1R = HRTIM_ADCTRIGGEREVENT13_TIMERA_CMP2 |
+                                       HRTIM_ADCTRIGGEREVENT13_TIMERA_CMP4;
+  hhrtim.Instance->sCommonRegs.CR2 |= HRTIM_CR2_TASWU;
 }
 
 /* Two S&H windows inside one zero vector. Used only while the bridge is
@@ -1144,11 +1152,38 @@ static void VCM_HRTIM_SetAdcPhasePair(uint16_t z0a, uint16_t z1a,
 VCM_ITCM
 static void VCM_HRTIM_SetAdcPhaseIdle(void)
 {
-  /* Same two-zero-vector placement the bipolar closed loop uses (T/2 each).
-   * Keeps the S&H phase valid while the bridge is off so dt-cal, mode
-   * switches and PWM arming do not spend a period on a bad pair. */
+  /* Two coasts, one S&H in each. Tri dual-cm and bipolar both need the pair. */
   VCM_HRTIM_SetAdcPhasePair(0U, (uint16_t)(VCM_PWM_PERIOD / 2U),
                             (uint16_t)(VCM_PWM_PERIOD / 2U), VCM_PWM_PERIOD);
+}
+
+/* Main context. Both modes: two conversions per period (CMP2 and CMP4). */
+static void VCM_AdcSyncNow(void)
+{
+  uint32_t n = (uint32_t)VCM_ADC_N;
+
+  hhrtim.Instance->sCommonRegs.ADC1R = HRTIM_ADCTRIGGEREVENT13_TIMERA_CMP2 |
+                                       HRTIM_ADCTRIGGEREVENT13_TIMERA_CMP4;
+  if (vcm_adc_len == (uint8_t)n)
+  {
+    vcm_adc_sync_req = 0U;
+    return;
+  }
+  if (hadc1.DMA_Handle != NULL)
+  {
+    (void)HAL_ADC_Stop_DMA(&hadc1);
+  }
+  if (HAL_ADC_Start_DMA(&hadc1, (uint32_t *)vcm_adc1_dma, n) != HAL_OK)
+  {
+    return;
+  }
+  __HAL_DMA_DISABLE_IT(hadc1.DMA_Handle, DMA_IT_HT);
+  __HAL_DMA_ENABLE_IT(hadc1.DMA_Handle, DMA_IT_TC);
+  HAL_NVIC_EnableIRQ(DMA1_Stream0_IRQn);
+  vcm_adc_len = (uint8_t)n;
+  vcm_pair_seq = 0U;
+  vcm_pair_taken = 0U;
+  vcm_adc_sync_req = 0U;
 }
 
 /* HRTIM counters drive HRTIM_ADCTRG1, which is the ADC's only trigger source.
@@ -1178,6 +1213,7 @@ static int VCM_HrtimCountersStart(void)
 int VCM_AdcStart(void)
 {
   uint32_t n;
+  uint32_t len = (uint32_t)VCM_ADC_N;
 
   for (n = 0U; n < VCM_ADC_N; n++)
   {
@@ -1190,16 +1226,17 @@ int VCM_AdcStart(void)
   vcm_pair_raw0 = (uint16_t)VCM_ADC_MID;
   vcm_pair_raw1 = (uint16_t)VCM_ADC_MID;
 
-  if (HAL_ADC_Start_DMA(&hadc1, (uint32_t *)vcm_adc1_dma, VCM_ADC_N) != HAL_OK)
+  if (HAL_ADC_Start_DMA(&hadc1, (uint32_t *)vcm_adc1_dma, len) != HAL_OK)
   {
     return -1;
   }
+  vcm_adc_len = (uint8_t)len;
   if (HAL_ADC_Start_DMA(&hadc2, (uint32_t *)&vcm_adc2_dma, 1U) != HAL_OK)
   {
     return -1;
   }
 
-  /* ADC1: TC = both coast samples latched. HT unused. ADC2: poll only. */
+  /* ADC1 TC: tri = 1 sample/period, bipolar = 2. */
   __HAL_DMA_DISABLE_IT(hadc1.DMA_Handle, DMA_IT_HT);
   __HAL_DMA_ENABLE_IT(hadc1.DMA_Handle, DMA_IT_TC);
   __HAL_DMA_DISABLE_IT(hadc2.DMA_Handle, DMA_IT_TC | DMA_IT_HT);
@@ -1207,7 +1244,9 @@ int VCM_AdcStart(void)
   HAL_NVIC_EnableIRQ(DMA1_Stream0_IRQn);
   HAL_NVIC_DisableIRQ(DMA1_Stream1_IRQn);
 
-  /* DMA is armed: let the triggers run so pairs start flowing while idle. */
+  VCM_HRTIM_SetAdcPhaseIdle();
+
+  /* DMA is armed: let the triggers run so samples arrive while idle. */
   if (VCM_HrtimCountersStart() != 0)
   {
     return -1;
@@ -1216,8 +1255,7 @@ int VCM_AdcStart(void)
   return 0;
 }
 
-/* DMA length-2 TC: I+ then I− are both in memory. Do not run PI here —
- * latch only; the 50 kHz REP consumes the snapshot. */
+/* DMA length-2 TC. Latch only; the 20 kHz REP consumes the snapshot. */
 VCM_ITCM
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 {
@@ -1231,7 +1269,7 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
   vcm_pair_seq = seq; /* odd = copy in progress */
   __DMB();
   vcm_pair_raw0 = vcm_adc1_dma[0];
-  vcm_pair_raw1 = vcm_adc1_dma[1];
+  vcm_pair_raw1 = (vcm_adc_len < 2U) ? vcm_adc1_dma[0] : vcm_adc1_dma[1];
   __DMB();
   vcm_pair_seq = seq + 1U; /* even = stable */
 }
@@ -1331,14 +1369,7 @@ static uint16_t VCM_DrvDtCounts(void)
 }
 
 /* Dead-time trim in counts, continuous through zero. BIPOLAR ONLY.
- * In bipolar the leg difference is a single pulse, so sign(i)·t_d lands
- * directly as volt-second error. Switching that sign hard leaves a frozen
- * band around zero where the trim is stuck on a stale value — the loop then
- * fights a constant error in the wrong direction, which is the +I / −I
- * asymmetry measured on the bench. Ramp linearly over ±VCM_DRV_DT_BAND_A.
- * Tri-level must not call this: both of its pulses see the same t_d, so the
- * error is common-mode and cancels in (da − db). 400 ns applied as a
- * difference there is ~0.27 A of phantom current. */
+ * Tri-level must not call this: both pulses see the same t_d. Ramp ±BAND. */
 VCM_ITCM
 static float VCM_DrvDtTrim(void)
 {
@@ -1375,23 +1406,15 @@ static void VCM_SelectRunMode(float iref)
   vcm_run_bip = (g_vcm.pwm_mode != VCM_PWM_MODE_TRILEVEL) ? 1U : 0U;
 }
 
-/*
- * Three-level: both pulses stay on in closed loop. m lengthens one side.
- * UART Z (open-loop hold) leaves both off.
- * Bipolar 0.5+/-m only if pwm_mode is bipolar.
+/* Three-level: both pulses every period. Each side stays at least cm.
+ * m lengthens one side by 2*|m|*T. m=0 keeps the two cm pulses.
+ * IFB S&H is inside each pulse. UART Z / DCM leave both pulses off.
  */
 VCM_ITCM
 static void VCM_HRTIM_ApplyDuty(float m)
 {
   uint16_t cmp_a;
   uint16_t cmp_b;
-  uint16_t cnt_a;
-  uint16_t cnt_b;
-  uint16_t room;
-  uint16_t remain;
-  uint16_t start_b;
-  float da_f;
-  float db_f;
   const uint16_t duty_min = 60U;
   const uint16_t duty_max = (uint16_t)(VCM_PWM_PERIOD - duty_min);
 
@@ -1412,8 +1435,8 @@ static void VCM_HRTIM_ApplyDuty(float m)
     cmp_b = duty_min;
     g_vcm.adc_active_valid = 1U;
     vcm_next_valid = 0U;
-  __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_COMPAREUNIT_1, cmp_a);
-  __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_B, HRTIM_COMPAREUNIT_1, cmp_b);
+    __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_A, HRTIM_COMPAREUNIT_1, cmp_a);
+    __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_B, HRTIM_COMPAREUNIT_1, cmp_b);
     VCM_HRTIM_SetAdcPhase(cmp_a, VCM_PWM_PERIOD);
     return;
   }
@@ -1422,11 +1445,18 @@ static void VCM_HRTIM_ApplyDuty(float m)
   {
     float cm;
     uint16_t cm_cnt;
-    uint16_t coast_min = VCM_ADC_ZERO_MIN_CNT;
+    uint16_t cnt_a;
+    uint16_t cnt_b;
+    uint16_t room;
+    uint16_t remain;
+    uint16_t start_b;
+    /* Gap between the two pulses. S&H is inside each pulse, not in the gap. */
+    uint16_t gap_min = VCM_ADC_EDGE_GUARD_CNT;
+    float da_f;
+    float db_f;
     float m_dt = m;
 
-    /* Hold / DCM: no forced dual cm. DCM+cm at small/zero I squeals under
-     * PMAC; FF still sets differential via one-sided 2·|m|. CCM keeps cm. */
+    /* Hold / DCM: no forced dual cm. CCM keeps a cm pulse on both sides. */
     if ((g_vcm.iref_hold_en != 0U) || (g_vcm.dcm != 0U))
     {
       cm = 0.0f;
@@ -1436,7 +1466,6 @@ static void VCM_HRTIM_ApplyDuty(float m)
       cm = VCM_TriCmDuty();
     }
     cm_cnt = (uint16_t)(cm * (float)VCM_PWM_PERIOD + 0.5f);
-    /* Both pulses stay at least cm (0 in DCM). m lengthens one side. */
     if (m_dt >= 0.0f)
     {
       da_f = cm + (2.0f * m_dt);
@@ -1466,9 +1495,9 @@ static void VCM_HRTIM_ApplyDuty(float m)
       cnt_b = duty_max;
     }
     if ((uint32_t)cnt_a + (uint32_t)cnt_b >
-        (uint32_t)VCM_PWM_PERIOD - (2U * (uint32_t)coast_min))
+        (uint32_t)VCM_PWM_PERIOD - (2U * (uint32_t)gap_min))
     {
-      room = (uint16_t)(VCM_PWM_PERIOD - (2U * (uint32_t)coast_min));
+      room = (uint16_t)(VCM_PWM_PERIOD - (2U * (uint32_t)gap_min));
       if (cnt_a >= cnt_b)
       {
         cnt_b = cm_cnt;
@@ -1507,22 +1536,23 @@ static void VCM_HRTIM_ApplyDuty(float m)
     }
     g_vcm.adc_active_valid = 1U;
     {
-      uint16_t z_hi0 = cnt_a;
-      uint16_t z_hi1 = start_b;
-      uint16_t z_lo0 = (uint16_t)(start_b + cnt_b);
-      uint16_t z_lo1 = VCM_PWM_PERIOD;
+      /* S&H inside +pulse [0, cnt_a) and −pulse [start_b, start_b+cnt_b). */
+      uint16_t p_a0 = 0U;
+      uint16_t p_a1 = (cnt_a < 2U) ? 2U : cnt_a;
+      uint16_t p_b0 = start_b;
+      uint16_t p_b1 = (uint16_t)(start_b + cnt_b);
 
-      if (z_hi1 <= z_hi0)
+      if (p_b1 <= p_b0)
       {
-        z_hi1 = (uint16_t)(z_hi0 + 2U);
+        p_b1 = (uint16_t)(p_b0 + 2U);
       }
-      if (z_lo0 >= VCM_PWM_PERIOD)
+      if (p_b1 > VCM_PWM_PERIOD)
       {
-        z_lo0 = (uint16_t)(VCM_PWM_PERIOD - 2U);
+        p_b1 = VCM_PWM_PERIOD;
       }
-      VCM_HRTIM_SetAdcPhasePair(z_hi0, z_hi1, z_lo0, z_lo1);
+      VCM_HRTIM_SetAdcPhasePair(p_a0, p_a1, p_b0, p_b1);
       {
-        uint16_t t0 = VCM_AdcTrigForZero(z_hi0, z_hi1);
+        uint16_t t0 = VCM_AdcTrigForZero(p_a0, p_a1);
         uint32_t cmp3 = (uint32_t)t0 + (uint32_t)VCM_ADC_CONV_GUARD;
 
         if (cmp3 >= (uint32_t)(VCM_PWM_PERIOD - 2U))
@@ -1545,7 +1575,7 @@ static void VCM_HRTIM_ApplyDuty(float m)
                                                    HRTIM_COMPAREUNIT_1);
     vcm_next_b2 = (uint16_t)__HAL_HRTIM_GETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_B,
                                                    HRTIM_COMPAREUNIT_2);
-    vcm_next_valid = (cnt_b > 0U) ? 1U : 0U;
+    vcm_next_valid = 0U;
     return;
   }
 
@@ -1645,6 +1675,7 @@ static void VCM_DtCalRestore(uint8_t use_result, uint16_t ns)
   g_vcm.iref_override_a = vcm_dt_saved_iref;
   g_vcm.drv_dt_ns = (use_result != 0U) ? ns : vcm_dt_saved_ns;
   vcm_dt_cal = 0U;
+  vcm_adc_sync_req = 1U;
   VCM_HRTIM_SetAdcPhaseIdle();
 }
 
@@ -1823,7 +1854,7 @@ void VCM_ServiceDrvEnable(void)
   if (!VCM_IsDrvEnActive())
   {
     /*
-     * Time-based debounce. The 50 kHz ISR tears the drive down faster (~400 us,
+     * Time-based debounce. The 20 kHz ISR tears the drive down faster (~400 us,
      * VCM_EN_GLITCH_SAMPLES); this path only matters if the ISR is not running.
      */
     if (g_vcm.state == VCM_STATE_RUN)
@@ -1861,6 +1892,10 @@ void VCM_Start(void)
   g_vcm.start_count++;
 
   VCM_LoopStateReset();
+#if (VCM_IDLE_CLAMP_EN == 0U)
+  /* PiStep also arms; set now so the first REP (often pair-miss) still PWM. */
+  g_vcm.pwm_armed = 1U;
+#endif
   vcm_chop_a = 0xFFU;
   vcm_chop_b = 0xFFU;
   VCM_HRTIM_ApplyDuty(0.0f);
@@ -1893,7 +1928,7 @@ void VCM_Start(void)
 
 #if VCM_DIAG_EN
 /*
- * Read-only observation: how many ISR ticks (~20 us each @ 50 kHz) the loop needs from an
+ * Read-only observation: how many ISR ticks (~50 us each @ 20 kHz) the loop needs from an
  * IREF step — as the firmware sees it — until the current settles inside
  * VCM_DIAG_DONE_BAND. Nothing here feeds back into the loop.
  *   small number  -> loop and plant are fine, the delay is upstream
@@ -2209,9 +2244,7 @@ void VCM_CurrentLoop_IRQHandler(void)
     }
   }
 
-  /* Bipolar samples both ends of the ripple — one S&H in each zero vector
-   * (see VCM_HRTIM_ApplyDuty) — so their mean already is the period
-   * average. No peak correction here. */
+  /* Tri: mean of the two in-pulse samples. Bipolar: mean of two zero samples. */
 
 #if VCM_DIAG_EN
   VCM_DiagService();
@@ -2227,22 +2260,31 @@ void VCM_CurrentLoop_IRQHandler(void)
     float fdbk_p;
     float fdbk_i;
 
-    if (g_vcm.pi_fdbk == VCM_PI_FDBK_AVG)
+#if (VCM_HALF_PI_EN != 0U)
+    float ts = (vcm_half_done != 0U) ? VCM_HALF_TS_S : VCM_PWM_TS_S;
+#else
+    float ts = VCM_PWM_TS_S;
+#endif
+
+    /* Missed TC: do NOT skip PiStep — that left pwm_armed=0 and killed PWM.
+     * Force e=0 so Ki cannot wind on stale IFB≈0; PiStep still arms. */
+    if (g_vcm.adc_pair_ok == 0U)
+    {
+      fdbk_p = ref;
+      fdbk_i = ref;
+    }
+    else if (g_vcm.pi_fdbk == VCM_PI_FDBK_AVG)
     {
       fdbk_p = ifb_pi;
       fdbk_i = ifb_pi;
     }
     else
     {
-      /* Both on î — steady state tracks period avg, not low coast IFB. */
+      /* OBS: Kp on î (damping), Ki on IFB (force = clamp/iavg). Both-on-î
+       * left DC short when the voltage model ran high vs plant. */
       fdbk_p = hat_pi;
-      fdbk_i = hat_pi;
+      fdbk_i = ifb_pi;
     }
-#if (VCM_HALF_PI_EN != 0U)
-    float ts = (vcm_half_done != 0U) ? VCM_HALF_TS_S : VCM_PWM_TS_S;
-#else
-    float ts = VCM_PWM_TS_S;
-#endif
 
     vcm_half_done = 0U;
     vcm_pi_ref = ref;
@@ -2262,6 +2304,7 @@ void VCM_CurrentLoop_IRQHandler(void)
   VCM_CapPush();
 }
 
+#if (VCM_HALF_PI_EN != 0U)
 /* −pulse for a +pulse that has already been scheduled. The coasts stay
  * long enough for the two samples. */
 VCM_ITCM
@@ -2339,6 +2382,7 @@ static void VCM_TimerBApplyNow(uint16_t start, uint16_t high_cnt)
   __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_B, HRTIM_COMPAREUNIT_1, vcm_next_b1);
   __HAL_HRTIM_SETCOMPARE(&hhrtim, HRTIM_TIMERINDEX_TIMER_B, HRTIM_COMPAREUNIT_2, vcm_next_b2);
 }
+#endif /* VCM_HALF_PI_EN */
 
 VCM_ITCM
 void VCM_CurrentLoop_HalfIRQ(void)
@@ -2406,7 +2450,7 @@ void VCM_CurrentLoop_HalfIRQ(void)
   else
   {
     fdbk_p = g_vcm.ifb_hat_a + (i0 - vcm_base_i0);
-    fdbk_i = fdbk_p;
+    fdbk_i = vcm_base_avg + (i0 - vcm_base_i0);
   }
   {
     float bias = VCM_IfbCcmBias(vcm_pi_ref);
@@ -2455,7 +2499,7 @@ void VCM_CurrentLoop_HalfIRQ(void)
   end_b = (uint16_t)(start_b + cnt_b);
   if ((start_b != vcm_act_b1) || (end_b != vcm_act_b2))
   {
-    /* g_vcm.mod stays the 50 kHz command. The observer keeps one 20 µs step. */
+    /* g_vcm.mod stays the 20 kHz command. The observer keeps one 50 µs step. */
     VCM_TimerBApplyNow(start_b, cnt_b);
   }
   vcm_half_done = 1U;
@@ -3385,6 +3429,7 @@ static void VCM_HostLine(char *line, uint16_t n)
     g_vcm.iref_override_en = 1U;
     g_vcm.iref_override_a = VCM_DtCalAmp(0U);
     vcm_dt_cal = 1U;
+    VCM_AdcSyncNow();
     VCM_HRTIM_SetAdcPhaseIdle();
     VCM_UartWrite("DT BUSY\r\n");
     return;
@@ -3681,6 +3726,10 @@ void VCM_NvPoll(void)
   uint8_t req = vcm_nv_req;
 
   VCM_CapPoll();
+  if (vcm_adc_sync_req != 0U)
+  {
+    VCM_AdcSyncNow();
+  }
   uint8_t dt_msg = vcm_dt_msg;
   int err;
 
@@ -3899,6 +3948,7 @@ uint8_t VCM_ServiceUartCmd(uint8_t cmd)
   {
     g_vcm.pwm_mode = VCM_PWM_MODE_BIPOLAR;
     vcm_tri_sign = 0;
+    VCM_AdcSyncNow();
     VCM_HRTIM_SetAdcPhaseIdle();
     VCM_UartWrite("PWM BIPOLAR\r\n");
     return 1U;
@@ -3907,6 +3957,7 @@ uint8_t VCM_ServiceUartCmd(uint8_t cmd)
   {
     g_vcm.pwm_mode = VCM_PWM_MODE_TRILEVEL;
     vcm_tri_sign = 0;
+    VCM_AdcSyncNow();
     VCM_HRTIM_SetAdcPhaseIdle();
     VCM_UartWrite("PWM TRILEVEL\r\n");
     return 1U;
