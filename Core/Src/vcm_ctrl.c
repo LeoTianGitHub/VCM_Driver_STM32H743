@@ -446,8 +446,8 @@ static float VCM_ModMax(void)
   {
     return VCM_BIP_MOD_MAX;
   }
-  /* Both pulses at least cm; leave a small gap between them. */
-  coast = (float)VCM_ADC_EDGE_GUARD_CNT / (float)VCM_PWM_PERIOD;
+  /* Both pulses at least cm, plus one coast on each side for S&H. */
+  coast = (float)VCM_ADC_ZERO_MIN_CNT / (float)VCM_PWM_PERIOD;
   mmax = 0.5f - VCM_TriCmDuty() - coast;
   if (mmax > VCM_MOD_MAX)
   {
@@ -949,8 +949,8 @@ static void VCM_FaultPin_Set(bool fault_active)
                     fault_active ? VCM_FAULT_ACTIVE_LEVEL : VCM_FAULT_INACTIVE_LEVEL);
 }
 
-/* Place the S&H window in interval [z0, z1] (pulse or zero). Hold ~70%
- * into the window. Short windows fall back to a centered S&H. */
+/* Place the S&H window in zero-vector [z0, z1]. Hold ~70% into the window
+ * (early post-edge sampling was noisier on the bench). CMP before hold. */
 VCM_ITCM
 static uint16_t VCM_AdcTrigForZero(uint16_t z0, uint16_t z1)
 {
@@ -1408,7 +1408,7 @@ static void VCM_SelectRunMode(float iref)
 
 /* Three-level: both pulses every period. Each side stays at least cm.
  * m lengthens one side by 2*|m|*T. m=0 keeps the two cm pulses.
- * IFB S&H is inside each pulse. UART Z / DCM leave both pulses off.
+ * UART Z (hold) and DCM leave both cm pulses off.
  */
 VCM_ITCM
 static void VCM_HRTIM_ApplyDuty(float m)
@@ -1450,8 +1450,7 @@ static void VCM_HRTIM_ApplyDuty(float m)
     uint16_t room;
     uint16_t remain;
     uint16_t start_b;
-    /* Gap between the two pulses. S&H is inside each pulse, not in the gap. */
-    uint16_t gap_min = VCM_ADC_EDGE_GUARD_CNT;
+    uint16_t coast_min = VCM_ADC_ZERO_MIN_CNT;
     float da_f;
     float db_f;
     float m_dt = m;
@@ -1495,9 +1494,9 @@ static void VCM_HRTIM_ApplyDuty(float m)
       cnt_b = duty_max;
     }
     if ((uint32_t)cnt_a + (uint32_t)cnt_b >
-        (uint32_t)VCM_PWM_PERIOD - (2U * (uint32_t)gap_min))
+        (uint32_t)VCM_PWM_PERIOD - (2U * (uint32_t)coast_min))
     {
-      room = (uint16_t)(VCM_PWM_PERIOD - (2U * (uint32_t)gap_min));
+      room = (uint16_t)(VCM_PWM_PERIOD - (2U * (uint32_t)coast_min));
       if (cnt_a >= cnt_b)
       {
         cnt_b = cm_cnt;
@@ -1536,23 +1535,22 @@ static void VCM_HRTIM_ApplyDuty(float m)
     }
     g_vcm.adc_active_valid = 1U;
     {
-      /* S&H inside +pulse [0, cnt_a) and −pulse [start_b, start_b+cnt_b). */
-      uint16_t p_a0 = 0U;
-      uint16_t p_a1 = (cnt_a < 2U) ? 2U : cnt_a;
-      uint16_t p_b0 = start_b;
-      uint16_t p_b1 = (uint16_t)(start_b + cnt_b);
+      uint16_t z_hi0 = cnt_a;
+      uint16_t z_hi1 = start_b;
+      uint16_t z_lo0 = (uint16_t)(start_b + cnt_b);
+      uint16_t z_lo1 = VCM_PWM_PERIOD;
 
-      if (p_b1 <= p_b0)
+      if (z_hi1 <= z_hi0)
       {
-        p_b1 = (uint16_t)(p_b0 + 2U);
+        z_hi1 = (uint16_t)(z_hi0 + 2U);
       }
-      if (p_b1 > VCM_PWM_PERIOD)
+      if (z_lo0 >= VCM_PWM_PERIOD)
       {
-        p_b1 = VCM_PWM_PERIOD;
+        z_lo0 = (uint16_t)(VCM_PWM_PERIOD - 2U);
       }
-      VCM_HRTIM_SetAdcPhasePair(p_a0, p_a1, p_b0, p_b1);
+      VCM_HRTIM_SetAdcPhasePair(z_hi0, z_hi1, z_lo0, z_lo1);
       {
-        uint16_t t0 = VCM_AdcTrigForZero(p_a0, p_a1);
+        uint16_t t0 = VCM_AdcTrigForZero(z_hi0, z_hi1);
         uint32_t cmp3 = (uint32_t)t0 + (uint32_t)VCM_ADC_CONV_GUARD;
 
         if (cmp3 >= (uint32_t)(VCM_PWM_PERIOD - 2U))
@@ -2244,7 +2242,7 @@ void VCM_CurrentLoop_IRQHandler(void)
     }
   }
 
-  /* Tri: mean of the two in-pulse samples. Bipolar: mean of two zero samples. */
+  /* Tri and bipolar: mean of the two coast samples. */
 
 #if VCM_DIAG_EN
   VCM_DiagService();

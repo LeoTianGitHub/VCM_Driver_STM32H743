@@ -35,11 +35,10 @@
 #define VCM_HALF_PI_EN             0U
 #define VCM_HALF_TS_S              (VCM_PWM_TS_S * 0.5f)
 /* Minimum width of each tri-level pulse (host $S cm=). Both sides fire
- * every period; m lengthens one side. IFB S&H sits inside each pulse, so
- * cm must cover edge + sample (~0.7 µs) + edge. */
-#define VCM_TRI_CM_NS              2500U
+ * every period; m lengthens one side. IFB S&H is in each coast. */
+#define VCM_TRI_CM_NS              400U
 #define VCM_TRI_CM_NS_MIN          200U
-#define VCM_TRI_CM_NS_MAX          5000U
+#define VCM_TRI_CM_NS_MAX          2000U
 /* $K: bipolar, t_d forced to 0, PI at ±0.2 A then ±0.6 A. Axis must be still. */
 #define VCM_DT_CAL_I1_A            0.20f
 #define VCM_DT_CAL_I2_A            0.60f
@@ -57,7 +56,7 @@
 /*
  * Three-level, one period: a pulse on each leg, each at least cm.
  * The longer side is cm + 2·|m|·T. Net voltage is 2·m·Vbus.
- * One S&H inside each pulse; one PI step per REP. Half-PI stays off.
+ * One S&H in each coast; one PI step per REP. Half-PI stays off.
  */
 
 #define VCM_I_MAX_A             10.0f
@@ -305,12 +304,12 @@
 
 /* Host frames: "$" ... "\n" @ 115200. Avoid 0x05 / 0xA0 (IAP).
  *   $I  identify     $P  telemetry     $D  dump params
- *   $S kp=300 ki=300000 obs=61 lpf=314 ff=0 vbus=48000 r=3620 l=1188 fdbk=1 dt=0 cm=2500 den=1 dx=120 de=10 n0=0 n1=0 n2=0 n3=0 gz=0 gs=350
+ *   $S kp=300 ki=300000 obs=61 lpf=314 ff=0 vbus=48000 r=3620 l=1188 fdbk=1 dt=0 cm=400 den=1 dx=120 de=10 n0=0 n1=0 n2=0 n3=0 gz=0 gs=350
  *      (kp/obs/lpf/vbus/r ×1000, ki ×1000, ff ×1e6, l = µH,
  *       lpf = command IREF LPF α, 0.610≈3 kHz @ 20 kHz, 1.0 = off,
  *       fdbk 0=Kp+Ki on IFB, 1=Kp on î / Ki on IFB,
  *       dt = bipolar dead-time trim ns, 0 = off,
- *       cm = minimum width of each tri-level pulse, ns, 200..5000,
+ *       cm = minimum width of each tri-level pulse, ns, 200..2000,
  *       den 0=DCM off (CCM PI) 1=allow DCM FF; dx = exit |iref| mA; de= compat,
  *       n0..n3 = current-command notch Hz, 0 = off,
  *       gz 0=one PI zone 1=standstill scale, gs = standstill scale ×1000)
@@ -339,6 +338,6 @@
 #define VCM_HW_VERSION          1U   /* PCB / hardware revision */
 #define VCM_FW_VERSION_MAJOR    1U
 #define VCM_FW_VERSION_MINOR    4U
-#define VCM_FW_VERSION_PATCH    147U /* cm range 200..5000 ns; default 2500 */
+#define VCM_FW_VERSION_PATCH    144U /* dual cm + coast pair sample @ 20 kHz */
 
 #endif /* VCM_CONFIG_H */

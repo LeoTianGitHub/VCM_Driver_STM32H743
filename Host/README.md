@@ -39,12 +39,12 @@ IAP 升级只擦 Sector 1–2，不会清掉参数。不要对 Sector3 做全片
 
 | 主机 | 从机 |
 |------|------|
-| `$I` | `ID … fw=1.4.147 pwm=20000`；三电平双边脉冲，每侧至少 cm（默认 2500 ns）；脉冲内各采样一次、一次 PI |
+| `$I` | `ID … fw=1.4.144 pwm=20000`；三电平双边窄脉冲，每侧至少 cm（默认 400 ns）；两段续流各采样一次、一次 PI |
 | `$S den=` | `0`=CCM+PI（默认，PMAC 用）；`1`=小电流 DCM（仅开环标定） |
 | `$S dx=/de=` | DCM 退出 |iref|（mA）；`de=` 保留兼容，退出不再看 IFB |
-| `$P` | `TL … iavg_ma=… ip_ma=… im_ma=…`（三电平：脉冲内两点；双极性：续流两点；iavg 为两点平均） |
-| `$D` | `PR hw=1 fw=1.4.147 … fdbk=1 dt_ns=… cm=…`（三电平两侧脉冲都至少 cm，默认 2500 ns；采样在脉冲内） |
-| `$S … fdbk=0|1 dt=<ns> cm=<ns> …` | `OK`/`ERR`；`cm` 为每一侧脉冲最小宽度 ns（200–5000） |
+| `$P` | `TL … iavg_ma=… ip_ma=… im_ma=…`（三电平和双极性都是每周期续流两点，iavg 为两点平均） |
+| `$D` | `PR hw=1 fw=1.4.144 … fdbk=1 dt_ns=… cm=…`（三电平两侧脉冲都至少 cm，默认 400 ns；采样在续流段） |
+| `$S … fdbk=0|1 dt=<ns> cm=<ns> …` | `OK`/`ERR`；`cm` 为每一侧窄脉冲的最小宽度 ns（200–2000） |
 | `$R 1500` | IREF 覆盖 1.500 A（PI 开） |
 | `$K` | `DT BUSY`，结束后 `DT ns=… pos=… neg=…`。机构停住、驱动使能。失败为 `DT ERR run/abort/fit` |
 | `$O` | 一次性标定 IREF 零偏。**上位机必须先保证模拟 IREF 输入为 0 V 并保持 10 ms**。先回 `IREFZ BUSY`，再回 `IREFZ <mA>`。失败为 `IREFZ ERR override`（当前在 `$R` 覆盖态，先 `$A`）/ `range`（读数超 ±50 mA，说明输入并非 0 V）/ `nosample`（500 ms 内没拿到新的 ADC 配对） |

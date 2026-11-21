@@ -291,14 +291,10 @@ static void VCM_NvApply(const VCM_Nv_t *nv)
     g_vcm.iref_lpf_a = VCM_IREF_OVR_LPF_A;
     g_vcm.i_obs_a = VCM_I_OBS_A;
   }
-  /* v20: in-pulse S&H needs cm >= 1.2 µs. */
-  if (nv->version < 20U)
+  /* v20/v21: intermediate in-pulse / wide-cm experiments. */
+  if (nv->version < 22U)
   {
-    g_vcm.tri_cm_ns = VCM_TRI_CM_NS;
-  }
-  /* v21: default cm = 2500 ns. */
-  if (nv->version < 21U)
-  {
+    /* v22: restore 1.4.144 coast-pair sample, cm default 400 ns. */
     g_vcm.tri_cm_ns = VCM_TRI_CM_NS;
   }
   VCM_NotchSync();

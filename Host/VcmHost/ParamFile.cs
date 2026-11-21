@@ -44,7 +44,7 @@ internal sealed class LoopParams
     public int DtNs { get; set; } = 400;
 
     [JsonPropertyName("cm_ns")]
-    public int CmNs { get; set; } = 2500;
+    public int CmNs { get; set; } = 400;
 
     [JsonPropertyName("dcm_en")]
     public int DcmEn { get; set; } = 0;

@@ -31,11 +31,11 @@ typedef struct
   float iref_a;
   float iref_offset_a;
   float ifb_a;
-  float ifb_avg_a;     /* multi-period EMA of 2-pt mean (PI / obs / TL) */
+  float ifb_avg_a;     /* multi-period EMA of 2-pt coast mean (PI / obs / TL) */
   float ifb_hat_a;     /* observer current → PI */
   float ifb_filt_a;    /* Live: alias of ifb_hat_a */
-  float ifb_ip_a;      /* tri: inside +pulse. bipolar: leading zero (ripple min) */
-  float ifb_im_a;      /* tri: inside −pulse. bipolar: trailing zero (ripple max) */
+  float ifb_ip_a;      /* tri: after +pulse. bipolar: leading zero (ripple min) */
+  float ifb_im_a;      /* tri: after −pulse. bipolar: trailing zero (ripple max) */
   float ifb_raw_a;
   float ifb_offset_a;
   float mod;

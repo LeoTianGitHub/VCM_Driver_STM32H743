@@ -289,8 +289,8 @@
                                 <TextBox x:Name="DtBox" Grid.Row="11" Grid.Column="1" Margin="0,3" Text="400"
                                          ToolTip="双极性死区补偿，两个沿合计，默认 400 ns。0 关闭。三电平不用此值。"/>
                                 <Label Grid.Row="12" Content="CM (ns)"/>
-                                <TextBox x:Name="CmBox" Grid.Row="12" Grid.Column="1" Margin="0,3" Text="2500"
-                                         ToolTip="三电平两侧最小脉宽，默认 2500 ns（200–5000）。采样在脉冲内；过窄时采样保持可能跨边沿。指令只加长一边。"/>
+                                <TextBox x:Name="CmBox" Grid.Row="12" Grid.Column="1" Margin="0,3" Text="400"
+                                         ToolTip="三电平两侧最小脉宽，默认 400 ns（200–2000）。采样在两段续流内。指令只加长一边。UART Z 时两边都关。"/>
                                 <Label Grid.Row="13" Content="DCM" VerticalAlignment="Center"/>
                                 <WrapPanel Grid.Row="13" Grid.Column="1" Margin="0,3">
                                     <RadioButton x:Name="DcmOn" Content="开" Margin="0,0,12,4"

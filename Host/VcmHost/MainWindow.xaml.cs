@@ -1810,7 +1810,7 @@ public partial class MainWindow : Window
         RcoilBox.Text = ParamFile.Fmt(p.R, "0.###");
         LcoilBox.Text = ParamFile.Fmt(p.LMh, "0.###");
         DtBox.Text = Math.Clamp(p.DtNs, 0, 1000).ToString(CultureInfo.InvariantCulture);
-        CmBox.Text = Math.Clamp(p.CmNs <= 0 ? 2500 : p.CmNs, Protocol.TriCmNsMin, Protocol.TriCmNsMax)
+        CmBox.Text = Math.Clamp(p.CmNs <= 0 ? 400 : p.CmNs, Protocol.TriCmNsMin, Protocol.TriCmNsMax)
             .ToString(CultureInfo.InvariantCulture);
         DcmExitBox.Text = ParamFile.Fmt(Math.Clamp(p.DcmExitA <= 0 ? 0.12 : p.DcmExitA, 0.05, 2.0), "0.###");
         DcmErrBox.Text = ParamFile.Fmt(Math.Clamp(p.DcmExitErrA <= 0 ? 0.01 : p.DcmExitErrA, 0.01, 0.5), "0.###");

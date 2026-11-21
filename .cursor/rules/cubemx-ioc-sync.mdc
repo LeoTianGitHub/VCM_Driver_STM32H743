@@ -25,7 +25,7 @@ Do not hand-edit `.ioc` with partial keys (e.g. `DMA_CIRCULAR` without DMA reque
  - Sampling: 16.5 cycles
 3. HRTIM ADCTRG1 init may be TimerA **CMP2 | CMP4**. Firmware overrides:
  - **Bipolar**: CMP2|CMP4, one S&H in each zero (`SetAdcPhasePair`)
- - **Tri-level**: CMP2|CMP4, one S&H inside each pulse (`SetAdcPhasePair`); both pulses at least cm (200..5000 ns), one side longer by 2|m|T
+ - **Tri-level**: CMP2|CMP4, one S&H in each coast (`SetAdcPhasePair`); both pulses at least cm, one side longer by 2|m|T
 4. Pair validity: **DMA TC latch** (`HAL_ADC_ConvCpltCallback`). Keep DMA1 Stream0 IRQ enabled.
 
 ## After Generate Code
